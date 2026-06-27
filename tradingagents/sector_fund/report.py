@@ -50,12 +50,32 @@ def _stock_group_lines(stocks: list[StockObservation], context: SectorFundContex
         risks = [
             f"{stock.name}(长上影:{_bool_with_source(stock.long_upper_shadow, _source(context, f'stock.{stock.code}.long_upper_shadow'))}, "
             f"冲高回落:{_bool_with_source(stock.intraday_pullback, _source(context, f'stock.{stock.code}.intraday_pullback'))}, "
+            f"跌破MA5:{_bool_with_source(stock.below_ma5, _source(context, f'stock.{stock.code}.below_ma5'))}, "
             f"跌破MA10:{_bool_with_source(stock.below_ma10, _source(context, f'stock.{stock.code}.below_ma10'))}, "
             f"来源:{_source(context, f'stock.{stock.code}.change_pct')})"
             for stock in rows
-            if stock.long_upper_shadow or stock.intraday_pullback or stock.below_ma10
+            if stock.long_upper_shadow or stock.intraday_pullback or stock.below_ma5 or stock.below_ma10
         ]
-        lines.append(f"- {theme}：强势股 {_join(strong)}；走弱股 {_join(weak)}；长上影/炸板/跌破MA10风险 {_join(risks)}。")
+        lhb_rows = [
+            f"{stock.name}(龙虎榜:{_bool_with_source(stock.on_lhb, _source(context, f'stock.{stock.code}.on_lhb'))}, "
+            f"机构净买:{_value(stock.institution_net_buy_billion, '亿元')}，"
+            f"游资净买:{_value(stock.hot_money_net_buy_billion, '亿元')}，"
+            f"净买额:{_value(stock.net_buy_amount_billion, '亿元')}，"
+            f"标签:{stock.sentiment_tag or '未获取到'})"
+            for stock in rows
+            if stock.on_lhb or stock.sentiment_tag
+        ]
+        ma_rows = [
+            f"{stock.name}(MA5={_value(stock.ma5)}，MA10={_value(stock.ma10)}，"
+            f"跌破MA5={_bool_with_source(stock.below_ma5, _source(context, f'stock.{stock.code}.below_ma5'))}，"
+            f"跌破MA10={_bool_with_source(stock.below_ma10, _source(context, f'stock.{stock.code}.below_ma10'))})"
+            for stock in rows
+        ]
+        lines.append(
+            f"- {theme}：强势股 {_join(strong)}；走弱股 {_join(weak)}；"
+            f"MA5/MA10 {_join(ma_rows)}；龙虎榜/机构游资 {_join(lhb_rows)}；"
+            f"长上影/炸板/跌破MA风险 {_join(risks)}。"
+        )
     return "\n".join(lines)
 
 
@@ -91,11 +111,41 @@ def _fund_lines(funds: list[FundHolding]) -> str:
     return "\n\n".join(lines)
 
 
-def _announcement_lines(announcements: list[Announcement]) -> str:
+def _announcement_item_lines(announcements: list[Announcement]) -> str:
     return "\n".join(
         f"- {ann.date} {ann.stock_name or ann.stock_code}：{ann.title}。类型：{ann.announcement_type or '未获取到'}；"
         f"方向：{ann.impact_direction}；强度：{ann.impact_strength}/5；摘要：{ann.summary or '未获取到'}"
         for ann in announcements
+    ) or "- 未获取到"
+
+
+def _announcement_lines(announcements: list[Announcement], funds: list[FundHolding]) -> str:
+    positive = [ann for ann in announcements if (ann.sentiment or ann.impact_direction) == "利好"]
+    negative = [ann for ann in announcements if (ann.sentiment or ann.impact_direction) == "利空"]
+    fund_holdings = {holding for fund in funds for holding in fund.top_holdings}
+
+    def affected_fund_hint(ann: Announcement) -> str:
+        if ann.stock_name in fund_holdings:
+            return "影响020671/025500重仓方向：是"
+        if ann.stock_name and any(keyword in ann.stock_name for keyword in ("芯片", "半导体", "存储")):
+            return "影响020671/025500重仓方向：可能"
+        return "影响020671/025500重仓方向：未确认"
+
+    detail = "\n".join(
+        f"- {ann.date} {ann.stock_name or ann.stock_code}：{ann.title}；"
+        f"类型：{ann.event_type or ann.announcement_type or '未获取到'}；"
+        f"方向：{ann.sentiment or ann.impact_direction}；强度：{ann.importance or ann.impact_strength}/5；"
+        f"{affected_fund_hint(ann)}；摘要：{ann.summary or '未获取到'}"
+        for ann in announcements
+    ) or "- 未获取到"
+
+    return (
+        "利好公告：\n"
+        f"{_announcement_item_lines(positive)}\n\n"
+        "利空公告：\n"
+        f"{_announcement_item_lines(negative)}\n\n"
+        "公告明细：\n"
+        f"{detail}"
     )
 
 
@@ -139,6 +189,8 @@ def render_sector_fund_report(context: SectorFundContext, score: Mapping[str, ob
     body = f"""## 1. 今日总判断
 - 半导体评分：{score['semiconductor_score']}
 - 存储芯片评分：{score['storage_score']}
+- 公告分：{score.get('announcement_score', 0)}
+- 情绪分：{score.get('emotion_score', 0)}
 - 状态：{score['status']}
 - 风险等级：{score['risk_level']}
 - 今日结论：半导体/存储仍偏强，但短线波动和分化需要观察。
@@ -186,7 +238,7 @@ def render_sector_fund_report(context: SectorFundContext, score: Mapping[str, ob
 - 是否建议超过{profile.get('max_recommended_position', 0):.0%}：不建议。
 
 ## 8. 公告与新闻风险
-{_announcement_lines(context.announcements)}
+{_announcement_lines(context.announcements, context.funds)}
 
 - 重要利好：关注重大订单、国产替代、产业政策。
 - 重要利空：关注减持、业绩预亏、风险提示和高位放量分歧。

@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 
 class HistoryStore:
@@ -8,7 +8,7 @@ class HistoryStore:
         self.path = Path(path)
         self.data = self._load()
 
-    def _load(self) -> Dict[str, Dict[str, float]]:
+    def _load(self) -> Dict[str, Dict[str, Any]]:
         if not self.path.exists():
             return {}
         try:
@@ -27,9 +27,41 @@ class HistoryStore:
         rows[trade_date] = float(price)
         self._save()
 
+    def record_stock_quote(self, code: str, trade_date: str, quote: Dict[str, Any]) -> None:
+        close = quote.get("close")
+        if close is None:
+            return
+        rows = self.data.setdefault(code, {})
+        rows[trade_date] = {
+            "stock_name": quote.get("stock_name") or quote.get("name") or "",
+            "date": trade_date,
+            "open": quote.get("open"),
+            "high": quote.get("high"),
+            "low": quote.get("low"),
+            "close": float(close),
+            "previous_close": quote.get("previous_close"),
+            "pct_chg": quote.get("pct_chg"),
+            "amount": quote.get("amount"),
+            "turnover": quote.get("turnover"),
+        }
+        self._save()
+
+    def _row_close(self, row: Any) -> Optional[float]:
+        if isinstance(row, dict):
+            row = row.get("close")
+        try:
+            return float(row)
+        except (TypeError, ValueError):
+            return None
+
     def _prices(self, code: str) -> list[float]:
         rows = self.data.get(code, {})
-        return [rows[key] for key in sorted(rows)]
+        prices = []
+        for key in sorted(rows):
+            close = self._row_close(rows[key])
+            if close is not None:
+                prices.append(close)
+        return prices
 
     def calculate_moving_averages(self, code: str) -> Dict[str, Optional[float] | str]:
         prices = self._prices(code)
@@ -63,3 +95,22 @@ class HistoryStore:
         state["below_ma20"] = ma20 is not None and price < ma20
         return state
 
+    def calculate_stock_ma_state(self, code: str, close: float) -> Dict[str, Optional[bool] | Optional[float] | str]:
+        prices = self._prices(code)
+        ma5 = round(sum(prices[-5:]) / 5, 4) if len(prices) >= 5 else None
+        ma10 = round(sum(prices[-10:]) / 10, 4) if len(prices) >= 10 else None
+        result: Dict[str, Optional[bool] | Optional[float] | str] = {
+            "ma5": ma5,
+            "ma10": ma10,
+            "ma5_status": "ok" if ma5 is not None else "insufficient_history",
+            "ma10_status": "ok" if ma10 is not None else "insufficient_history",
+            "below_ma5": None,
+            "below_ma10": None,
+        }
+        if close is None:
+            return result
+        if ma5 is not None:
+            result["below_ma5"] = close < ma5
+        if ma10 is not None:
+            result["below_ma10"] = close < ma10
+        return result

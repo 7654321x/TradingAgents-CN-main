@@ -41,6 +41,11 @@ def _mock_stocks(watch_stocks: Dict[str, List[Dict[str, str]]]) -> List[StockObs
                     below_ma5=change_pct < -1,
                     below_ma10=change_pct < -3,
                     on_lhb=index == 0,
+                    institution_net_buy_billion=0.8 if index == 0 else None,
+                    hot_money_net_buy_billion=0.2 if index == 0 else None,
+                    net_buy_amount_billion=1.0 if index == 0 else None,
+                    lhb_reason="日涨幅偏离值达7%" if index == 0 else "",
+                    sentiment_tag="机构+游资净买入" if index == 0 else "",
                 )
             )
     return stock_rows
@@ -119,9 +124,9 @@ def build_mock_sector_fund_context(
             EtfObservation("516640", "芯片龙头ETF", 0.756, 0.9, 6.4, 4.1, -0.02, 3.9, 0.752, 0.741, 0.714, True, False),
         ],
         announcements=[
-            Announcement("某半导体设备公司披露重大订单进展", analysis_date, "688012", "中微公司", "重大订单", major_order=True, summary="订单能见度改善，对设备链情绪有支撑。", impact_direction="利好", impact_strength=4),
-            Announcement("某存储链公司提示短期涨幅较大风险", analysis_date, "688525", "佰维存储", "风险提示", risk_warning=True, summary="短线波动加大，追高胜率下降。", impact_direction="利空", impact_strength=3),
-            Announcement("某材料公司股东拟小比例减持", analysis_date, "688019", "安集科技", "股东减持", shareholder_reduce=True, summary="减持比例不高，但会压制短期风险偏好。", impact_direction="利空", impact_strength=2),
+            Announcement("某半导体设备公司披露重大订单进展", analysis_date, "688012", "中微公司", "重大订单", "重大订单", "利好", 4, major_order=True, summary="订单能见度改善，对设备链情绪有支撑。", impact_direction="利好", impact_strength=4),
+            Announcement("某存储链公司提示短期涨幅较大风险", analysis_date, "688525", "佰维存储", "风险提示", "风险提示", "利空", 3, risk_warning=True, summary="短线波动加大，追高胜率下降。", impact_direction="利空", impact_strength=3),
+            Announcement("某材料公司股东拟小比例减持", analysis_date, "688019", "安集科技", "股东减持", "股东减持", "利空", 2, shareholder_reduce=True, summary="减持比例不高，但会压制短期风险偏好。", impact_direction="利空", impact_strength=2),
         ],
         raw_text={"mock": "mock数据已启用"},
         source_status={"mock": "success"},
@@ -185,11 +190,36 @@ def _mark_mock_field_sources(context: SectorFundContext) -> None:
             "turnover_billion",
             "turnover_rate",
             "main_inflow_billion",
+            "ma5",
+            "ma10",
             "limit_up",
             "limit_down",
             "intraday_pullback",
             "long_upper_shadow",
             "below_ma5",
             "below_ma10",
+            "on_lhb",
+            "institution_net_buy_billion",
+            "hot_money_net_buy_billion",
+            "buy_top5_amount_billion",
+            "sell_top5_amount_billion",
+            "net_buy_amount_billion",
+            "lhb_reason",
+            "sentiment_tag",
         ):
             context.field_sources[f"stock.{stock.code}.{field_name}"] = "mock_fallback"
+
+    for announcement in context.announcements:
+        for field_name in (
+            "title",
+            "event_type",
+            "sentiment",
+            "importance",
+            "is_earnings_increase",
+            "is_earnings_loss",
+            "is_shareholder_reduce",
+            "is_risk_warning",
+            "is_big_order",
+            "is_customer_validation",
+        ):
+            context.field_sources[f"announcement.{announcement.stock_code}.{field_name}"] = "mock_fallback"

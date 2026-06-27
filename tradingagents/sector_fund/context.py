@@ -60,6 +60,8 @@ class StockObservation:
     low: Optional[float] = None
     close: Optional[float] = None
     previous_close: Optional[float] = None
+    ma5: Optional[float] = None
+    ma10: Optional[float] = None
     limit_up: bool = False
     limit_down: bool = False
     intraday_pullback: bool = False
@@ -67,6 +69,13 @@ class StockObservation:
     below_ma5: bool = False
     below_ma10: bool = False
     on_lhb: bool = False
+    institution_net_buy_billion: Optional[float] = None
+    hot_money_net_buy_billion: Optional[float] = None
+    buy_top5_amount_billion: Optional[float] = None
+    sell_top5_amount_billion: Optional[float] = None
+    net_buy_amount_billion: Optional[float] = None
+    lhb_reason: str = ""
+    sentiment_tag: str = ""
 
 
 @dataclass
@@ -114,15 +123,21 @@ class Announcement:
     stock_code: str = ""
     stock_name: str = ""
     announcement_type: str = ""
+    event_type: str = ""
+    sentiment: str = "中性"
+    importance: int = 3
     earnings_up: bool = False
     earnings_down: bool = False
     shareholder_reduce: bool = False
     private_placement: bool = False
     major_order: bool = False
     risk_warning: bool = False
+    customer_validation: bool = False
     summary: str = ""
     impact_direction: str = "中性"
     impact_strength: int = 3
+    source: str = ""
+    raw_text: str = ""
 
 
 @dataclass

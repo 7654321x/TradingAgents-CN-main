@@ -26,12 +26,8 @@ def _sector_score(context: SectorFundContext, sector_name: str) -> int:
     weak_count = sum(1 for stock in theme_stocks if stock.below_ma10 or (stock.change_pct or 0) < -3)
     leaders = 10 + strong_count * 2 - weak_count * 3
 
-    good_news = sum(ann.impact_strength for ann in context.announcements if ann.impact_direction == "利好")
-    bad_news = sum(ann.impact_strength for ann in context.announcements if ann.impact_direction == "利空")
-    news = 5 + good_news - bad_news
-
-    hot_risk = sum(1 for stock in context.stocks if stock.long_upper_shadow or stock.intraday_pullback)
-    emotion = 5 - hot_risk * 0.5
+    news = 5 + _announcement_score(context)
+    emotion = 5 + _emotion_score(context)
 
     market = 5
     if (context.market.chinext_change_pct or 0) > 0 and (context.market.star50_change_pct or 0) > 0:
@@ -42,9 +38,53 @@ def _sector_score(context: SectorFundContext, sector_name: str) -> int:
     return _clamp(trend + flow + leaders + news + emotion + market)
 
 
+def _announcement_score(context: SectorFundContext) -> int:
+    score = 0
+    negative_core_count = 0
+    for ann in context.announcements:
+        if ann.earnings_up:
+            score += 4
+        if ann.major_order or ann.customer_validation:
+            score += 4
+        if ann.shareholder_reduce:
+            score -= 4
+            negative_core_count += 1
+        if ann.earnings_down:
+            score -= 5
+            negative_core_count += 1
+        if ann.risk_warning:
+            score -= 3
+            negative_core_count += 1
+    if negative_core_count >= 2:
+        score -= 3
+    return score
+
+
+def _emotion_score(context: SectorFundContext) -> int:
+    score = 0
+    institution_buy_count = sum(1 for stock in context.stocks if (stock.institution_net_buy_billion or 0) > 0)
+    lhb_sell_count = sum(1 for stock in context.stocks if (stock.net_buy_amount_billion or 0) < 0)
+    hot_fade_count = sum(1 for stock in context.stocks if stock.intraday_pullback and (stock.hot_money_net_buy_billion or 0) > 0)
+    shadow_count = sum(1 for stock in context.stocks if stock.long_upper_shadow or stock.intraday_pullback)
+
+    if institution_buy_count >= 1:
+        score += 2
+    if institution_buy_count >= 2:
+        score += 3
+    if hot_fade_count >= 1:
+        score -= 2
+    if lhb_sell_count >= 2:
+        score -= 3
+    if shadow_count >= 3:
+        score -= 3
+    return score
+
+
 def score_sector_fund_context(context: SectorFundContext) -> Dict[str, object]:
     semiconductor_score = _sector_score(context, "半导体")
     storage_score = _sector_score(context, "存储芯片")
+    announcement_score = _announcement_score(context)
+    emotion_score = _emotion_score(context)
     average_score = (semiconductor_score + storage_score) / 2
 
     if average_score >= 80:
@@ -71,8 +111,9 @@ def score_sector_fund_context(context: SectorFundContext) -> Dict[str, object]:
     return {
         "semiconductor_score": semiconductor_score,
         "storage_score": storage_score,
+        "announcement_score": announcement_score,
+        "emotion_score": emotion_score,
         "status": status,
         "risk_level": risk_level,
         "suggestion": suggestion,
     }
-

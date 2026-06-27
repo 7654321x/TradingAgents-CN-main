@@ -77,6 +77,14 @@ def _parse_labeled_amount(text: str, labels: list[str]) -> Optional[float]:
     return parse_chinese_amount_to_billion(value) if value else None
 
 
+def _parse_last_labeled_amount(text: str, labels: list[str]) -> Optional[float]:
+    matches: list[str] = []
+    for label in labels:
+        pattern = rf"{re.escape(label)}\s*[:：]?\s*([-+]?\d+(?:,\d{{3}})*(?:\.\d+)?\s*(?:万亿|亿元|亿|万元|万))"
+        matches.extend(match.group(1) for match in re.finditer(pattern, text))
+    return parse_chinese_amount_to_billion(matches[-1]) if matches else None
+
+
 def _parse_labeled_percent(text: str, labels: list[str]) -> Optional[float]:
     value = _find_value_after_label(text, labels, r"[-+]?\d+(?:\.\d+)?\s*%")
     return parse_percent_value(value) if value else None
@@ -244,6 +252,133 @@ def parse_stock_quote_text(stock_code: str, stock_name: str, theme: str, text: s
     return parsed
 
 
+def parse_lhb_text(stock_code: str, stock_name: str, text: str) -> Dict[str, Any]:
+    cleaned = _clean_text(text)
+    if not cleaned or (stock_code not in cleaned and stock_name not in cleaned):
+        return {}
+
+    parsed: Dict[str, Any] = {"stock_code": stock_code, "stock_name": stock_name, "is_on_lhb": "龙虎榜" in cleaned}
+    if not parsed["is_on_lhb"]:
+        return {}
+
+    institution = _parse_labeled_amount(cleaned, ["机构专用净买入", "机构净买入", "机构买入净额", "机构席位净买入"])
+    hot_money = _parse_labeled_amount(cleaned, ["游资净买入", "知名游资净买入", "营业部净买入"])
+    buy_top5 = _parse_labeled_amount(cleaned, ["买入前五合计", "买五合计", "买入金额合计"])
+    sell_top5 = _parse_labeled_amount(cleaned, ["卖出前五合计", "卖五合计", "卖出金额合计"])
+    net_buy = _parse_last_labeled_amount(cleaned, ["龙虎榜净买入", "净买入", "净买额", "净额"])
+
+    _set_if_present(parsed, "institution_net_buy", institution)
+    _set_if_present(parsed, "hot_money_net_buy", hot_money)
+    _set_if_present(parsed, "buy_top5_amount", buy_top5)
+    _set_if_present(parsed, "sell_top5_amount", sell_top5)
+    _set_if_present(parsed, "net_buy_amount", net_buy)
+
+    reason_match = re.search(r"上榜原因\s*[:：]?\s*([^，。；;\n\r]+)", cleaned)
+    if reason_match:
+        parsed["lhb_reason"] = reason_match.group(1).strip()
+
+    if institution is not None and institution > 0 and hot_money is not None and hot_money > 0:
+        parsed["sentiment_tag"] = "机构+游资净买入"
+    elif institution is not None and institution > 0:
+        parsed["sentiment_tag"] = "机构净买入"
+    elif institution is not None and institution < 0:
+        parsed["sentiment_tag"] = "机构净卖出"
+    elif hot_money is not None and hot_money > 0:
+        parsed["sentiment_tag"] = "游资主导"
+    elif net_buy is not None and net_buy < 0:
+        parsed["sentiment_tag"] = "龙虎榜净卖出"
+    else:
+        parsed["sentiment_tag"] = "龙虎榜上榜"
+
+    return parsed
+
+
+POSITIVE_ANNOUNCEMENT_KEYWORDS = {
+    "业绩预增": "业绩预增",
+    "订单增长": "订单增长",
+    "中标": "中标",
+    "客户验证通过": "客户验证",
+    "扩产": "扩产",
+    "国产替代": "国产替代",
+    "研发突破": "研发突破",
+    "毛利率提升": "毛利率提升",
+}
+
+NEGATIVE_ANNOUNCEMENT_KEYWORDS = {
+    "减持": "股东减持",
+    "业绩预亏": "业绩预亏",
+    "风险提示": "风险提示",
+    "股价异动": "股价异动",
+    "问询函": "问询函",
+    "监管函": "监管函",
+    "毛利率下降": "毛利率下降",
+    "终止项目": "终止项目",
+    "诉讼": "诉讼",
+}
+
+
+def _announcement_segment(cleaned: str, code: str, name: str) -> str:
+    marker_match = re.search(rf"(?:{re.escape(code)}|{re.escape(name)})", cleaned)
+    if not marker_match:
+        return ""
+    start = max(0, cleaned.rfind("\n", 0, marker_match.start()))
+    if start < 0:
+        start = max(0, marker_match.start() - 80)
+    next_stock = re.search(r"\n\s*\d{4}-\d{2}-\d{2}\s+\d{6}", cleaned[marker_match.end() :])
+    end = marker_match.end() + next_stock.start() if next_stock else min(len(cleaned), marker_match.end() + 260)
+    return cleaned[start:end].strip()
+
+
+def parse_announcement_text(text: str, watch_stocks: Dict[str, str] | None = None) -> list[Dict[str, Any]]:
+    cleaned = _clean_text(text).replace("。", "。\n")
+    watch_stocks = watch_stocks or {}
+    announcements: list[Dict[str, Any]] = []
+
+    for code, name in watch_stocks.items():
+        segment = _announcement_segment(cleaned, code, name)
+        if not segment:
+            continue
+
+        positive_types = [event_type for keyword, event_type in POSITIVE_ANNOUNCEMENT_KEYWORDS.items() if keyword in segment]
+        negative_types = [event_type for keyword, event_type in NEGATIVE_ANNOUNCEMENT_KEYWORDS.items() if keyword in segment]
+        if not positive_types and not negative_types:
+            continue
+
+        title_match = re.search(rf"(?:\d{{4}}-\d{{2}}-\d{{2}}\s*)?(?:{re.escape(code)}\s*)?{re.escape(name)}\s*([^\n。；;]{{2,80}})", segment)
+        date_match = re.search(r"\d{4}-\d{2}-\d{2}", segment)
+        event_types = negative_types + positive_types if negative_types else positive_types
+        sentiment = "利好" if positive_types and not negative_types else "利空" if negative_types else "中性"
+        importance = 3
+        if any(item in event_types for item in ("业绩预增", "订单增长", "客户验证")):
+            importance = 4
+        if any(item in event_types for item in ("股东减持", "业绩预亏", "风险提示")):
+            importance = 5 if "业绩预亏" in event_types else 4
+
+        title = title_match.group(1).strip() if title_match else "公告事件"
+        announcements.append(
+            {
+                "announcement_date": date_match.group(0) if date_match else "",
+                "stock_code": code,
+                "stock_name": name,
+                "title": title,
+                "event_type": "、".join(dict.fromkeys(event_types)),
+                "sentiment": sentiment,
+                "importance": importance,
+                "summary": segment[:160],
+                "is_earnings_increase": "业绩预增" in segment,
+                "is_earnings_loss": "业绩预亏" in segment,
+                "is_shareholder_reduce": "减持" in segment,
+                "is_risk_warning": "风险提示" in segment or "股价异动" in segment,
+                "is_big_order": "订单增长" in segment or "中标" in segment,
+                "is_customer_validation": "客户验证通过" in segment,
+                "source": "",
+                "raw_text": segment,
+            }
+        )
+
+    return announcements
+
+
 def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: str, history_store=None):
     parsed_any = False
 
@@ -323,29 +458,133 @@ def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: s
         text = raw_text.get(f"stock_eastmoney_{stock.code}") or raw_text.get(f"stock_10jqka_{stock.code}", "")
         if not text:
             context.field_sources[f"raw.stock_{stock.code}"] = "missing"
-            continue
+        else:
+            parsed = parse_stock_quote_text(stock.code, stock.name, stock.theme, text)
+            field_mapping = {
+                "open": "open_price",
+                "high": "high",
+                "low": "low",
+                "close": "close",
+                "previous_close": "previous_close",
+                "change_pct": "change_pct",
+                "turnover_billion": "turnover_billion",
+                "turnover_rate": "turnover_rate",
+                "main_inflow_billion": "main_inflow_billion",
+                "limit_up": "limit_up",
+                "limit_down": "limit_down",
+                "long_upper_shadow": "long_upper_shadow",
+                "intraday_pullback": "intraday_pullback",
+            }
+            for parsed_field, context_field in field_mapping.items():
+                if parsed_field in parsed and hasattr(stock, context_field):
+                    setattr(stock, context_field, parsed[parsed_field])
+                    context.field_sources[f"stock.{stock.code}.{context_field}"] = source_label
+                    parsed_any = True
 
-        parsed = parse_stock_quote_text(stock.code, stock.name, stock.theme, text)
-        field_mapping = {
-            "open": "open_price",
-            "high": "high",
-            "low": "low",
-            "close": "close",
-            "previous_close": "previous_close",
-            "change_pct": "change_pct",
-            "turnover_billion": "turnover_billion",
-            "turnover_rate": "turnover_rate",
-            "main_inflow_billion": "main_inflow_billion",
-            "limit_up": "limit_up",
-            "limit_down": "limit_down",
-            "long_upper_shadow": "long_upper_shadow",
-            "intraday_pullback": "intraday_pullback",
-        }
-        for parsed_field, context_field in field_mapping.items():
-            if parsed_field in parsed and hasattr(stock, context_field):
-                setattr(stock, context_field, parsed[parsed_field])
-                context.field_sources[f"stock.{stock.code}.{context_field}"] = source_label
-                parsed_any = True
+            if history_store and parsed.get("close") is not None:
+                history_store.record_stock_quote(
+                    stock.code,
+                    context.analysis_date,
+                    {
+                        "stock_name": stock.name,
+                        "open": parsed.get("open"),
+                        "high": parsed.get("high"),
+                        "low": parsed.get("low"),
+                        "close": parsed.get("close"),
+                        "previous_close": parsed.get("previous_close"),
+                        "pct_chg": parsed.get("change_pct"),
+                        "amount": parsed.get("turnover_billion"),
+                        "turnover": parsed.get("turnover_rate"),
+                    },
+                )
+                ma_state = history_store.calculate_stock_ma_state(stock.code, parsed.get("close"))
+                for field_name in ("ma5", "ma10", "below_ma5", "below_ma10"):
+                    value = ma_state.get(field_name)
+                    if value is not None:
+                        setattr(stock, field_name, value)
+                    elif field_name in {"ma5", "ma10"}:
+                        setattr(stock, field_name, None)
+                    else:
+                        setattr(stock, field_name, False)
+                    source = ma_state.get(f"{field_name}_status") if field_name in {"ma5", "ma10"} else None
+                    if field_name == "below_ma5":
+                        source = ma_state.get("ma5_status")
+                    if field_name == "below_ma10":
+                        source = ma_state.get("ma10_status")
+                    context.field_sources[f"stock.{stock.code}.{field_name}"] = source_label if source == "ok" else "insufficient_history"
+                    parsed_any = True
+
+        lhb_text = raw_text.get(f"stock_lhb_{stock.code}") or raw_text.get("ths_lhb") or raw_text.get("eastmoney_lhb", "")
+        lhb = parse_lhb_text(stock.code, stock.name, lhb_text)
+        if lhb:
+            lhb_mapping = {
+                "is_on_lhb": "on_lhb",
+                "institution_net_buy": "institution_net_buy_billion",
+                "hot_money_net_buy": "hot_money_net_buy_billion",
+                "buy_top5_amount": "buy_top5_amount_billion",
+                "sell_top5_amount": "sell_top5_amount_billion",
+                "net_buy_amount": "net_buy_amount_billion",
+                "lhb_reason": "lhb_reason",
+                "sentiment_tag": "sentiment_tag",
+            }
+            for parsed_field, context_field in lhb_mapping.items():
+                if parsed_field in lhb and hasattr(stock, context_field):
+                    setattr(stock, context_field, lhb[parsed_field])
+                    context.field_sources[f"stock.{stock.code}.{context_field}"] = source_label
+                    parsed_any = True
+        else:
+            context.field_sources.setdefault(f"stock.{stock.code}.on_lhb", "missing")
+
+    announcement_text = "\n".join(
+        raw_text.get(key, "")
+        for key in ("cninfo", "eastmoney_announcements", "ths_announcements")
+        if raw_text.get(key)
+    )
+    watch_stocks = {stock.code: stock.name for stock in context.stocks}
+    parsed_announcements = parse_announcement_text(announcement_text, watch_stocks=watch_stocks)
+    if parsed_announcements:
+        from .context import Announcement
+
+        context.announcements = []
+        for item in parsed_announcements:
+            ann = Announcement(
+                title=item["title"],
+                date=item["announcement_date"] or context.analysis_date,
+                stock_code=item["stock_code"],
+                stock_name=item["stock_name"],
+                announcement_type=item["event_type"],
+                event_type=item["event_type"],
+                sentiment=item["sentiment"],
+                importance=item["importance"],
+                earnings_up=item["is_earnings_increase"],
+                earnings_down=item["is_earnings_loss"],
+                shareholder_reduce=item["is_shareholder_reduce"],
+                major_order=item["is_big_order"],
+                risk_warning=item["is_risk_warning"],
+                customer_validation=item["is_customer_validation"],
+                summary=item["summary"],
+                impact_direction=item["sentiment"],
+                impact_strength=item["importance"],
+                source=source_label,
+                raw_text=item["raw_text"],
+            )
+            context.announcements.append(ann)
+            for field_name in (
+                "title",
+                "event_type",
+                "sentiment",
+                "importance",
+                "is_earnings_increase",
+                "is_earnings_loss",
+                "is_shareholder_reduce",
+                "is_risk_warning",
+                "is_big_order",
+                "is_customer_validation",
+            ):
+                context.field_sources[f"announcement.{ann.stock_code}.{field_name}"] = source_label
+            parsed_any = True
+    else:
+        context.field_sources.setdefault("announcement.raw_text", "missing")
 
     if not parsed_any:
         context.warnings.append("真实网页raw_text未解析出结构化字段，保留mock_fallback字段。")
