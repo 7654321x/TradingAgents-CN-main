@@ -1,0 +1,77 @@
+portfolio:
+  name: "个人基金持仓组合"
+  total_position_pct: 20
+  target_position_pct: 30
+  max_position_pct: 35
+  cash_position_pct: 80
+  style: "aggressive"
+  description: "个人场外基金盘中跟踪组合"
+  decision_times:
+    morning: "10:00"
+    afternoon: "14:45"
+    night: "21:30"
+
+database:
+  type: "sqlite"
+  path: "data/fund_assistant.sqlite3"
+
+data_sources:
+  use_baostock: true
+  use_web: true
+  use_firecrawl: false
+  save_raw_text: true
+  raw_text_dir: "data/debug_raw"
+  akshare:
+    enabled: true
+    use_for_fund_estimate: true
+    use_for_fund_nav: true
+    use_for_fund_holdings: true
+    use_for_etf_quote_fallback: true
+    use_for_stock_quote_fallback: true
+    use_for_sector_fallback: true
+  baostock:
+    enabled: true
+    use_for_history_kline: true
+    use_for_ma: true
+  eastmoney:
+    enabled: true
+    use_for_intraday_quote: true
+    use_for_sector_quote: true
+  tiantianfund:
+    enabled: true
+    use_for_fund_estimate: true
+
+funds:
+  - code: "020671"
+    name: "易方达科创芯片ETF联接C"
+    type: "etf_feeder"
+    role: "base"
+    position_pct: 12
+    max_single_position_pct: 20
+    risk_level: "medium_high"
+    decision_priority: 1
+    holding_days: null
+    fee_note: ""
+    tracking:
+      etfs: ["588200", "588290", "512480", "159995"]
+      indices: ["科创50", "创业板指"]
+      sectors: ["科创芯片", "半导体", "AI芯片"]
+      top_holdings_mode: "auto_from_fund_page"
+      manual_holdings: []
+
+  - code: "025500"
+    name: "东方阿尔法科技智选混合C"
+    type: "active_equity"
+    role: "aggressive"
+    position_pct: 8
+    max_single_position_pct: 15
+    risk_level: "high"
+    decision_priority: 2
+    holding_days: null
+    fee_note: ""
+    tracking:
+      etfs: ["512480", "159995", "588200"]
+      indices: ["创业板指", "科创50"]
+      sectors: ["存储芯片", "半导体设备", "AI芯片", "PCB", "消费电子"]
+      top_holdings_mode: "auto_from_fund_page"
+      manual_holdings: []

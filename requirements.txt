@@ -21,7 +21,7 @@ chromadb
 setuptools
 akshare>=1.17.86
 tushare
-baostock
+baostock>=0.8.8
 finnhub-python
 parsel
 requests

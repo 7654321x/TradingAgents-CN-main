@@ -39,3 +39,16 @@ def test_main_explicit_sector_fund_runs_sector_fund(monkeypatch):
     main.main()
 
     assert called["sector_fund"] is True
+
+
+def test_main_explicit_fund_intraday_runs_data_context_mode(monkeypatch):
+    import main
+
+    called = {"fund_intraday": False}
+    monkeypatch.setattr(sys, "argv", ["main.py", "--mode", "fund_intraday", "--config", "config/personal_fund_portfolio.yaml"])
+    monkeypatch.setattr(main, "run_fund_intraday_from_args", lambda args: called.__setitem__("fund_intraday", True))
+    monkeypatch.setattr(main, "run_stock_demo", lambda: (_ for _ in ()).throw(AssertionError("stock demo should not run")))
+
+    main.main()
+
+    assert called["fund_intraday"] is True
