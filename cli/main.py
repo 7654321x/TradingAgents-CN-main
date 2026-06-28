@@ -1652,6 +1652,26 @@ def analyze_sector_fund(
         "-o",
         help="报告输出目录",
     ),
+    save_history: bool = typer.Option(
+        True,
+        "--save-history/--no-save-history",
+        help="生成报告后是否保存评分历史",
+    ),
+    history_days: int = typer.Option(
+        5,
+        "--history-days",
+        help="报告中展示最近多少天变化",
+    ),
+    min_real_coverage: float = typer.Option(
+        0.4,
+        "--min-real-coverage",
+        help="真实覆盖率低于该阈值时降低建议强度；0.4 表示 40%",
+    ),
+    open_report: bool = typer.Option(
+        False,
+        "--open-report/--no-open-report",
+        help="生成后尝试打开报告文件",
+    ),
 ):
     """
     生成个人半导体/存储板块与基金持仓趋势报告。
@@ -1665,6 +1685,10 @@ def analyze_sector_fund(
         use_mock=mock_data,
         use_firecrawl=firecrawl,
         output_dir=output_dir,
+        save_history=save_history,
+        history_days=history_days,
+        min_real_coverage=min_real_coverage,
+        open_report=open_report,
     )
 
     score = result["score"]
@@ -1675,6 +1699,25 @@ def analyze_sector_fund(
     console.print(f"状态: [yellow]{score['status']}[/yellow] / 风险: [yellow]{score['risk_level']}[/yellow]")
     console.print(f"建议: {score['suggestion']}")
     console.print(f"报告路径: [blue]{output_path}[/blue]")
+
+
+@app.command(
+    name="sector-fund-healthcheck",
+    help="sector_fund 健康检查 | Sector fund healthcheck"
+)
+def sector_fund_healthcheck(
+    config_path: str = typer.Option(
+        "config/personal_semiconductor.yaml",
+        "--config",
+        "-c",
+        help="个人半导体/存储配置文件路径",
+    ),
+):
+    """检查 sector_fund 配置、历史文件、日报脚本和运行状态。"""
+    from tradingagents.sector_fund.healthcheck import format_healthcheck_report, run_sector_fund_healthcheck
+
+    result = run_sector_fund_healthcheck(config_path=config_path)
+    console.print(format_healthcheck_report(result))
 
 
 @app.command(

@@ -227,7 +227,38 @@ ETF 与龙头股增强：
 reports/sector_fund/sector_fund_report_YYYY-MM-DD.md
 ```
 
-报告包含半导体评分、存储芯片评分、ETF MA5/MA10/MA20 观察、龙头股强弱、基金持有/小加/止盈观察、下个交易日分场景策略和免责声明。
+报告包含半导体评分、存储芯片评分、ETF MA5/MA10/MA20 观察、龙头股强弱、基金持有/谨慎跟踪/止盈观察、下个交易日分场景策略和免责声明。
+
+历史评分与日报自动化：
+
+- 默认会把每日评分写入 `data/sector_fund_score_history.json`，包括半导体评分、存储评分、公告分、情绪分、风险等级、真实覆盖率和报告路径。
+- 可用 `--no-save-history` 关闭归档，用 `--history-days 10` 调整报告中的最近评分对比天数。
+- 可用 `--min-real-coverage 0.4` 设置真实覆盖率门槛；低于门槛时报告建议会自动变保守，并提示人工核对。
+- 健康检查命令：`python main.py --mode sector_fund_healthcheck --config config/personal_semiconductor.yaml`。
+- Typer CLI 健康检查：`python -m cli.main sector-fund-healthcheck --config config/personal_semiconductor.yaml`。
+- Windows 日报脚本：`scripts/run_sector_fund_daily.ps1`，会优先运行 real-data，失败后自动回退 mock，并把日志写到 `logs/sector_fund_daily_YYYY-MM-DD.log`。
+
+PowerShell 手动运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_sector_fund_daily.ps1
+```
+
+Windows 任务计划程序建议：
+
+- 新建基本任务，触发器可设置为交易日盘后 `16:30` 和晚上 `21:30`。
+- 操作选择“启动程序”，程序填写 `powershell.exe`。
+- 参数填写：`-ExecutionPolicy Bypass -File "D:\PycharmProjects\TradingAgents-CN-main\scripts\run_sector_fund_daily.ps1"`。
+- 起始于填写项目根目录：`D:\PycharmProjects\TradingAgents-CN-main`。
+
+日常使用建议：
+
+- 每天盘后 `16:30` 运行一次，先看板块资金、ETF 和龙头股表现。
+- 晚上 `21:30` 再运行一次，用于补充基金净值和公告信息。
+- 连续运行 5-10 个交易日后，MA 和评分变化更有参考价值。
+- 真实覆盖率低于 40% 时，只用于流程验证和人工核对。
+- 不要因为单日评分高就重仓追，重点看连续评分变化和风险等级变化。
+- 若健康检查提示配置、历史文件或脚本异常，先修复基础环境再使用报告。
 
 免责声明：本模式仅用于个人研究和复盘，不构成投资建议，不包含自动交易或确定性收益承诺。市场有风险，决策需自行承担。
 

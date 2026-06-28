@@ -7,10 +7,10 @@ def _clamp(value: float, minimum: int = 0, maximum: int = 100) -> int:
     return int(max(minimum, min(maximum, round(value))))
 
 
-def _sector_score(context: SectorFundContext, sector_name: str) -> int:
+def _sector_components(context: SectorFundContext, sector_name: str) -> Dict[str, float]:
     sector = next((item for item in context.sectors if item.name == sector_name), None)
     if not sector:
-        return 50
+        return {"trend": 20, "flow": 10, "leaders": 10, "news": 5, "emotion": 5, "market": 5}
 
     trend = 12 + (sector.change_pct or 0) * 4 + (sector.change_5d_pct or 0) * 0.8
     flow = 10
@@ -26,16 +26,25 @@ def _sector_score(context: SectorFundContext, sector_name: str) -> int:
     weak_count = sum(1 for stock in theme_stocks if stock.below_ma10 or (stock.change_pct or 0) < -3)
     leaders = 10 + strong_count * 2 - weak_count * 3
 
-    news = 5 + _announcement_score(context)
-    emotion = 5 + _emotion_score(context)
-
     market = 5
     if (context.market.chinext_change_pct or 0) > 0 and (context.market.star50_change_pct or 0) > 0:
         market += 3
     if (context.market.declining_count or 0) > (context.market.advancing_count or 0):
         market -= 3
 
-    return _clamp(trend + flow + leaders + news + emotion + market)
+    return {
+        "trend": trend,
+        "flow": flow,
+        "leaders": leaders,
+        "news": 5 + _announcement_score(context),
+        "emotion": 5 + _emotion_score(context),
+        "market": market,
+    }
+
+
+def _sector_score(context: SectorFundContext, sector_name: str) -> int:
+    components = _sector_components(context, sector_name)
+    return _clamp(sum(components.values()))
 
 
 def _announcement_score(context: SectorFundContext) -> int:
@@ -80,6 +89,35 @@ def _emotion_score(context: SectorFundContext) -> int:
     return score
 
 
+def _average_component(context: SectorFundContext, name: str) -> float:
+    semiconductor = _sector_components(context, "半导体")[name]
+    storage = _sector_components(context, "存储芯片")[name]
+    return round((semiconductor + storage) / 2, 2)
+
+
+def _coverage_threshold(min_real_coverage: float) -> float:
+    return min_real_coverage * 100 if min_real_coverage <= 1 else min_real_coverage
+
+
+def apply_data_quality_gate(score: Dict[str, object], real_coverage_rate: float, min_real_coverage: float = 0.4) -> Dict[str, object]:
+    gated = dict(score)
+    threshold = _coverage_threshold(min_real_coverage)
+    coverage = float(real_coverage_rate or 0)
+    gated["real_coverage_rate"] = coverage
+    if coverage < threshold:
+        gated["suggestion"] = "真实数据覆盖率较低，本报告更适合流程验证，建议结合人工核对，暂不依据本报告操作。"
+        gated["risk_level"] = "高"
+        gated["data_quality_gate"] = "low"
+    elif coverage < 70:
+        suggestion = str(gated.get("suggestion", ""))
+        if "小加" in suggestion or "追" in suggestion:
+            gated["suggestion"] = "持有观察，等待确认；如需动作仅限谨慎小仓，并结合人工核对。"
+        gated["data_quality_gate"] = "medium"
+    else:
+        gated["data_quality_gate"] = "ok"
+    return gated
+
+
 def score_sector_fund_context(context: SectorFundContext) -> Dict[str, object]:
     semiconductor_score = _sector_score(context, "半导体")
     storage_score = _sector_score(context, "存储芯片")
@@ -111,8 +149,13 @@ def score_sector_fund_context(context: SectorFundContext) -> Dict[str, object]:
     return {
         "semiconductor_score": semiconductor_score,
         "storage_score": storage_score,
+        "trend_score": _average_component(context, "trend"),
+        "flow_score": _average_component(context, "flow"),
+        "leader_score": _average_component(context, "leaders"),
         "announcement_score": announcement_score,
         "emotion_score": emotion_score,
+        "market_score": _average_component(context, "market"),
+        "total_score": round(average_score, 2),
         "status": status,
         "risk_level": risk_level,
         "suggestion": suggestion,

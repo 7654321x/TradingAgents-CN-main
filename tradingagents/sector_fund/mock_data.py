@@ -130,6 +130,9 @@ def build_mock_sector_fund_context(
         ],
         raw_text={"mock": "mock数据已启用"},
         source_status={"mock": "success"},
+        source_mode="mock",
+        report_date=analysis_date,
+        data_date=None,
     )
     _mark_mock_field_sources(context)
     return context

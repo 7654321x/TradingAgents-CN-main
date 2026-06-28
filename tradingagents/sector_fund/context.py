@@ -156,4 +156,8 @@ class SectorFundContext:
     source_status: Dict[str, str] = field(default_factory=dict)
     field_sources: Dict[str, str] = field(default_factory=dict)
     data_quality: Dict[str, Any] = field(default_factory=dict)
+    history_summary: Dict[str, Any] = field(default_factory=dict)
+    source_mode: str = "mock"
+    report_date: str = ""
+    data_date: Optional[str] = None
     warnings: List[str] = field(default_factory=list)
