@@ -19,6 +19,7 @@ from .data_audit import build_audit_rows, render_terminal_summary, write_audit_o
 from .db import initialize_database, get_connection
 from .domestic_web_provider import build_sector_fund_urls
 from .eastmoney_quote_provider import EastMoneyQuoteProvider
+from .fetch_logger import DataFetchLogger
 from .parsers import parse_announcement_text, parse_fund_flow_text, parse_fund_holdings_text
 from .repository import FundRepository
 
@@ -86,15 +87,42 @@ def run_data_probe(
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     records: List[ProbeRecord] = []
-    records.extend(_probe_baostock(config, raw_dir))
+    fetch_logger = DataFetchLogger(echo=view)
+    fetch_logger.info(f"开始数据探针 | config={config_path} raw_dir={raw_dir}")
+
+    if baostock_only or _baostock_enabled(config):
+        fetch_logger.info("开始采集Baostock日K/MA字段")
+        new_records = _probe_baostock(config, raw_dir)
+        records.extend(new_records)
+        _log_probe_records(new_records, logger=fetch_logger)
+    else:
+        fetch_logger.info("已按配置跳过Baostock日K/MA字段 | fallback=AKShare/EastMoney")
+
     if not baostock_only:
-        records.extend(_probe_tiantian_fund(config, raw_dir, timeout=timeout))
-        records.extend(_probe_eastmoney_structured(config, raw_dir, timeout=timeout))
+        fetch_logger.info("开始采集天天基金估算/持仓字段")
+        new_records = _probe_tiantian_fund(config, raw_dir, timeout=timeout)
+        records.extend(new_records)
+        _log_probe_records(new_records, logger=fetch_logger)
+
+        fetch_logger.info("开始采集东方财富结构化行情字段")
+        new_records = _probe_eastmoney_structured(config, raw_dir, timeout=timeout)
+        records.extend(new_records)
+        _log_probe_records(new_records, logger=fetch_logger)
         if _akshare_enabled(config, use_akshare):
-            records.extend(_probe_akshare(config, raw_dir))
+            fetch_logger.info("开始采集AKShare基金/ETF/股票/板块字段")
+            new_records = _probe_akshare(config, raw_dir)
+            records.extend(new_records)
+            _log_probe_records(new_records, logger=fetch_logger)
         if not no_web:
-            records.extend(_probe_raw_fallbacks(config, raw_dir, timeout=timeout))
-            records.extend(_probe_firecrawl(config, raw_dir, timeout=timeout))
+            fetch_logger.info("开始采集国内网页raw_text兜底字段")
+            new_records = _probe_raw_fallbacks(config, raw_dir, timeout=timeout)
+            records.extend(new_records)
+            _log_probe_records(new_records, logger=fetch_logger)
+
+            fetch_logger.info("开始采集Firecrawl raw_text兜底字段")
+            new_records = _probe_firecrawl(config, raw_dir, timeout=timeout)
+            records.extend(new_records)
+            _log_probe_records(new_records, logger=fetch_logger)
 
     coverage = calculate_probe_coverage(records)
     report = _render_probe_report(config_path, records, coverage, raw_dir)
@@ -135,7 +163,22 @@ def run_data_probe(
     }
     if view:
         print(result["terminal_summary"])
+    fetch_logger.info(f"覆盖率汇总 | core={coverage['core_coverage_rate']}%({coverage['core_matched_count']}/{coverage['core_total_count']}) all={coverage['all_coverage_rate']}%({coverage['all_matched_count']}/{coverage['all_total_count']})")
     return result
+
+
+def _log_probe_records(records: List[ProbeRecord], echo: bool = False, logger: DataFetchLogger | None = None) -> None:
+    logger = logger or DataFetchLogger(echo=echo)
+    logger.info(f"data_probe字段获取日志 | 记录数={len(records)}")
+    for record in records:
+        logger.fetch_result(
+            source_name=record.source_name,
+            url=record.url or record.interface_name,
+            status=f"{record.fetch_status}/{record.parser_status}",
+            raw_text_length=record.raw_text_length,
+            fields=record.matched_fields,
+            error_reason=record.error_reason,
+        )
 
 
 def load_probe_config(config_path: str | Path) -> Dict[str, Any]:
@@ -753,6 +796,15 @@ def _akshare_enabled(config: Dict[str, Any], cli_value: bool | None) -> bool:
         return cli_value
     data_sources = config.get("raw_config", config).get("data_sources", {})
     return bool(data_sources.get("akshare", {}).get("enabled", True))
+
+
+def _baostock_enabled(config: Dict[str, Any]) -> bool:
+    data_sources = config.get("raw_config", config).get("data_sources", {})
+    if data_sources.get("use_baostock") is False:
+        return False
+    if data_sources.get("baostock", {}).get("enabled") is False:
+        return False
+    return True
 
 
 def calculate_probe_coverage(records: List[ProbeRecord]) -> Dict[str, Any]:

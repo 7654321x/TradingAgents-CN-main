@@ -16,7 +16,7 @@ database:
   path: "data/fund_assistant.sqlite3"
 
 data_sources:
-  use_baostock: true
+  use_baostock: false
   use_web: true
   use_firecrawl: false
   save_raw_text: true
@@ -30,9 +30,10 @@ data_sources:
     use_for_stock_quote_fallback: true
     use_for_sector_fallback: true
   baostock:
-    enabled: true
-    use_for_history_kline: true
-    use_for_ma: true
+    # 默认关闭 Baostock，优先用 AKShare 读取基金、ETF、股票和板块数据。
+    enabled: false
+    use_for_history_kline: false
+    use_for_ma: false
   eastmoney:
     enabled: true
     use_for_intraday_quote: true

@@ -167,6 +167,23 @@
 
 本项目新增一个独立的个人研究模式，用于生成「A股半导体/存储板块 + 个人基金持仓趋势报告」。该模式不改变原有单只股票多 Agent 分析流程，不自动交易，不自动下单，只输出研究辅助信息。
 
+本地运行命令约定：
+
+在 Windows PowerShell 中，优先使用项目虚拟环境里的 Python 运行，避免误用系统 Python 版本：
+
+```powershell
+.\.venv\Scripts\python.exe main.py ...
+```
+
+常用示例：
+
+```powershell
+.\.venv\Scripts\python.exe main.py --mode sector_fund --config config/personal_semiconductor.yaml --mock --save-history
+.\.venv\Scripts\python.exe main.py --mode sector_fund --config config/personal_semiconductor.yaml --real-data --save-history
+.\.venv\Scripts\python.exe main.py --mode fund_intraday --config config/personal_fund_portfolio.yaml --decision-time 1445 --use-sql --refresh-data --save-snapshot
+.\.venv\Scripts\python.exe main.py --mode stock_demo
+```
+
 配置文件：
 
 ```bash

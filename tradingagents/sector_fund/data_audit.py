@@ -375,12 +375,19 @@ def render_terminal_summary(
         "【估算误差/偏差提示】",
         _terminal_estimate_warning_rows(audit_rows),
         "",
-        "【Baostock ETF】",
-        _terminal_entity_rows(audit_rows, "etf", source="baostock", all_rows=audit_rows),
-        "",
-        "【Baostock 指数】",
-        _terminal_entity_rows(audit_rows, "index", source="baostock", all_rows=audit_rows),
-        "",
+    ]
+    if any(row.get("source") == "baostock" for row in audit_rows):
+        lines.extend(
+            [
+                "【Baostock ETF】",
+                _terminal_entity_rows(audit_rows, "etf", source="baostock", all_rows=audit_rows),
+                "",
+                "【Baostock 指数】",
+                _terminal_entity_rows(audit_rows, "index", source="baostock", all_rows=audit_rows),
+                "",
+            ]
+        )
+    lines.extend([
         "【最终采用数据源】",
         _terminal_adoption_rows(audit_rows),
         "",
@@ -392,7 +399,7 @@ def render_terminal_summary(
         "",
         "【同源读取一致性检查】",
         _terminal_consistency_rows(audit_rows),
-    ]
+    ])
     return "\n".join(lines)
 
 

@@ -422,6 +422,21 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
             "audit_reason": "TEXT",
             "config_file": "TEXT",
             "run_time": "TEXT",
+        },
+        "security_quote_snapshot": {
+            "ma5": "REAL",
+            "ma10": "REAL",
+            "ma20": "REAL",
+            "below_ma20": "INTEGER",
+            "trend_status": "TEXT",
+            "final_source": "TEXT",
+            "upstream_group": "TEXT",
+            "audit_status": "TEXT",
+        },
+        "data_source_run": {
+            "parser_status": "TEXT",
+            "started_at": "TEXT",
+            "finished_at": "TEXT",
         }
     }
     for table, table_columns in columns.items():

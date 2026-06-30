@@ -4,6 +4,8 @@ from typing import Any, Dict
 
 import requests
 
+from .fetch_logger import DataFetchLogger
+
 
 DEFAULT_DOMESTIC_URLS = {
     "eastmoney_home": "https://www.eastmoney.com/",
@@ -38,7 +40,12 @@ class DomesticWebProvider:
         self.firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY")
         self.firecrawl_api_url = os.getenv("FIRECRAWL_API_URL", "https://api.firecrawl.dev")
 
-    def fetch_raw_pages(self, urls: Dict[str, str] | None = None, use_firecrawl: bool = False) -> DomesticWebResult:
+    def fetch_raw_pages(
+        self,
+        urls: Dict[str, str] | None = None,
+        use_firecrawl: bool = False,
+        fetch_logger: DataFetchLogger | None = None,
+    ) -> DomesticWebResult:
         urls = urls or DEFAULT_DOMESTIC_URLS
         result = DomesticWebResult()
         for name, url in urls.items():
@@ -49,10 +56,27 @@ class DomesticWebProvider:
             else:
                 result.raw_text[name] = ""
                 result.source_status[name] = "failed"
+            if fetch_logger:
+                fetch_logger.fetch_result(
+                    source_name=name,
+                    url=url,
+                    status=result.source_status[name],
+                    raw_text_length=len(text or ""),
+                )
         return result
 
-    def fetch_sector_fund_pages(self, config: Dict[str, Any], use_firecrawl: bool = False) -> DomesticWebResult:
-        return self.fetch_raw_pages(build_sector_fund_urls(config), use_firecrawl=use_firecrawl)
+    def fetch_sector_fund_pages(
+        self,
+        config: Dict[str, Any],
+        use_firecrawl: bool = False,
+        fetch_logger: DataFetchLogger | None = None,
+    ) -> DomesticWebResult:
+        try:
+            return self.fetch_raw_pages(build_sector_fund_urls(config), use_firecrawl=use_firecrawl, fetch_logger=fetch_logger)
+        except TypeError:
+            # Backward-compatible with tests or subclasses that still expose the
+            # original fetch_raw_pages(urls, use_firecrawl) signature.
+            return self.fetch_raw_pages(build_sector_fund_urls(config), use_firecrawl=use_firecrawl)
 
     def _fetch_with_requests(self, url: str) -> str:
         try:

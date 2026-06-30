@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import io
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, Optional
+
+from .logging_utils import get_sector_logger
 
 
 INDEX_CODE_MAP = {
@@ -109,6 +113,8 @@ class BaostockProvider:
         self._logged_in = False
         self.login_count = 0
         self.logout_count = 0
+        self.native_stdout = ""
+        self.native_stderr = ""
 
     def login(self) -> str:
         if self._logged_in:
@@ -119,7 +125,11 @@ class BaostockProvider:
             self.login_status = "dependency_missing"
             self.last_error = f"baostock import failed: {exc}"
             return self.login_status
-        login = bs.login()
+        out = io.StringIO()
+        err = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            login = bs.login()
+        self._capture_native_output(out.getvalue(), err.getvalue())
         self.login_count += 1
         if getattr(login, "error_code", "") != "0":
             self.login_status = "login_failed"
@@ -136,7 +146,11 @@ class BaostockProvider:
             self.logout_status = "not_logged_in"
             return self.logout_status
         try:
-            self._bs.logout()
+            out = io.StringIO()
+            err = io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                self._bs.logout()
+            self._capture_native_output(out.getvalue(), err.getvalue())
             self.logout_count += 1
             self.logout_status = "success"
         except Exception as exc:
@@ -146,6 +160,49 @@ class BaostockProvider:
             self._logged_in = False
             self._bs = None
         return self.logout_status
+
+    def fetch_latest_daily_snapshots_batch(
+        self,
+        codes: Iterable[str],
+        lookback_days: int = 40,
+        purpose: str = "batch_history",
+    ) -> Dict[str, Dict[str, Any]]:
+        code_list = list(codes)
+        logger = get_sector_logger("baostock")
+        if self.login() != "success":
+            logger.warning(
+                "⚠️ [Baostock] 批次登录失败，改用AKShare历史行情兜底 | reason=%s purpose=%s symbols=%s",
+                self.last_error,
+                purpose,
+                len(code_list),
+            )
+            return {
+                code: {
+                    "code": code,
+                    "rows": [],
+                    "indicator": {},
+                    "source": "baostock",
+                    "source_status": self.login_status,
+                    "error_reason": self.last_error or "baostock login failed",
+                }
+                for code in code_list
+            }
+        logger.info("✅ [Baostock] 批次登录成功 | symbols=%s purpose=%s", len(code_list), purpose)
+        if self.native_stdout or self.native_stderr:
+            logger.debug("🔧 [Baostock] 原生输出 | stdout=%s stderr=%s", self.native_stdout.strip(), self.native_stderr.strip())
+        try:
+            return {code: self.fetch_latest_daily_snapshot(code, lookback_days=lookback_days) for code in code_list}
+        finally:
+            self.logout()
+            logger.info("✅ [Baostock] 批次退出成功 | symbols=%s purpose=%s", len(code_list), purpose)
+            if self.native_stdout or self.native_stderr:
+                logger.debug("🔧 [Baostock] 原生输出 | stdout=%s stderr=%s", self.native_stdout.strip(), self.native_stderr.strip())
+
+    def _capture_native_output(self, stdout_text: str, stderr_text: str) -> None:
+        if stdout_text:
+            self.native_stdout = (self.native_stdout + stdout_text)[-2000:]
+        if stderr_text:
+            self.native_stderr = (self.native_stderr + stderr_text)[-2000:]
 
     def __enter__(self):
         self.login()

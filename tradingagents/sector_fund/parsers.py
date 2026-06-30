@@ -1,6 +1,8 @@
 import re
 from typing import Any, Dict, Optional
 
+from .fetch_logger import DataFetchLogger
+
 
 SECTOR_ALIASES = {
     "半导体": "semiconductor_main_inflow_billion",
@@ -379,7 +381,14 @@ def parse_announcement_text(text: str, watch_stocks: Dict[str, str] | None = Non
     return announcements
 
 
-def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: str, history_store=None):
+def _log_parsed(fetch_logger: DataFetchLogger | None, source_name: str, parsed: Dict[str, Any], entity: str = "") -> None:
+    if not fetch_logger:
+        return
+    fields = [field for field, value in parsed.items() if field not in {"code", "name", "theme"} and value is not None and value != []]
+    fetch_logger.parsed_fields(source_name, fields, entity=entity)
+
+
+def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: str, history_store=None, fetch_logger: DataFetchLogger | None = None):
     parsed_any = False
 
     for source_key in ("eastmoney_sector_fund_flow", "ths_industry_flow"):
@@ -388,6 +397,7 @@ def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: s
             context.field_sources[f"raw.{source_key}"] = "missing"
             continue
         parsed = parse_fund_flow_text(text)
+        _log_parsed(fetch_logger, source_key, {**parsed.get("fund_flow", {}), **{f"sector.{k}.{sf}": sv for k, v in parsed.get("sectors", {}).items() for sf, sv in v.items()}})
         for field_name, value in parsed.get("fund_flow", {}).items():
             setattr(context.fund_flow, field_name, value)
             context.field_sources[f"fund_flow.{field_name}"] = source_label
@@ -407,7 +417,9 @@ def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: s
 
         fund_text = raw_text.get(f"fund_{fund_code}", "")
         if fund_text:
-            for field_name, value in parse_fund_nav_text(fund_code, fund_text).items():
+            parsed_fund_nav = parse_fund_nav_text(fund_code, fund_text)
+            _log_parsed(fetch_logger, f"fund_{fund_code}", parsed_fund_nav, entity=fund_code)
+            for field_name, value in parsed_fund_nav.items():
                 if hasattr(fund, field_name) and field_name != "code":
                     setattr(fund, field_name, value)
                     context.field_sources[f"fund.{fund_code}.{field_name}"] = source_label
@@ -417,7 +429,9 @@ def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: s
 
         holdings_text = raw_text.get(f"fund_{fund_code}_holdings", "")
         if holdings_text:
-            for field_name, value in parse_fund_holdings_text(holdings_text).items():
+            parsed_holdings = parse_fund_holdings_text(holdings_text)
+            _log_parsed(fetch_logger, f"fund_{fund_code}_holdings", parsed_holdings, entity=fund_code)
+            for field_name, value in parsed_holdings.items():
                 if value:
                     setattr(fund, field_name, value)
                     context.field_sources[f"fund.{fund_code}.{field_name}"] = source_label
@@ -432,6 +446,7 @@ def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: s
             continue
 
         parsed = parse_etf_quote_text(etf.code, etf.name, text)
+        _log_parsed(fetch_logger, f"etf_{etf.code}", parsed, entity=f"{etf.code} {etf.name}")
         for field_name, value in parsed.items():
             if field_name in {"code", "name"}:
                 continue
@@ -460,6 +475,7 @@ def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: s
             context.field_sources[f"raw.stock_{stock.code}"] = "missing"
         else:
             parsed = parse_stock_quote_text(stock.code, stock.name, stock.theme, text)
+            _log_parsed(fetch_logger, f"stock_{stock.code}", parsed, entity=f"{stock.code} {stock.name}")
             field_mapping = {
                 "open": "open_price",
                 "high": "high",
@@ -517,6 +533,7 @@ def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: s
         lhb_text = raw_text.get(f"stock_lhb_{stock.code}") or raw_text.get("ths_lhb") or raw_text.get("eastmoney_lhb", "")
         lhb = parse_lhb_text(stock.code, stock.name, lhb_text)
         if lhb:
+            _log_parsed(fetch_logger, f"lhb_{stock.code}", lhb, entity=f"{stock.code} {stock.name}")
             lhb_mapping = {
                 "is_on_lhb": "on_lhb",
                 "institution_net_buy": "institution_net_buy_billion",
@@ -547,6 +564,7 @@ def apply_raw_text_to_context(context, raw_text: Dict[str, str], source_label: s
 
         context.announcements = []
         for item in parsed_announcements:
+            _log_parsed(fetch_logger, "announcements", item, entity=f"{item['stock_code']} {item['stock_name']}")
             ann = Announcement(
                 title=item["title"],
                 date=item["announcement_date"] or context.analysis_date,

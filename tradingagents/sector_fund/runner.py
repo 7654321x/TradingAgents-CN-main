@@ -5,6 +5,7 @@ import webbrowser
 
 from .data_quality import calculate_data_quality
 from .domestic_web_provider import DomesticWebProvider, merge_raw_text_status
+from .fetch_logger import DataFetchLogger
 from .formatter import format_sector_fund_context_for_agents
 from .history_store import HistoryStore
 from .mock_data import build_mock_sector_fund_context
@@ -52,8 +53,10 @@ def run_sector_fund_analysis(
     context.report_date = date.today().isoformat()
     context.data_date = None
     if not use_mock:
+        fetch_logger = DataFetchLogger()
+        fetch_logger.info(f"开始真实数据采集 | mode={_source_mode(use_mock, use_firecrawl)} | config={config_path}")
         provider = DomesticWebProvider()
-        raw_result = provider.fetch_sector_fund_pages(context.config, use_firecrawl=use_firecrawl)
+        raw_result = provider.fetch_sector_fund_pages(context.config, use_firecrawl=use_firecrawl, fetch_logger=fetch_logger)
         context = merge_raw_text_status(context, raw_result)
         source_label = "firecrawl_raw" if use_firecrawl else "real_data"
         context = apply_raw_text_to_context(
@@ -61,7 +64,9 @@ def run_sector_fund_analysis(
             raw_result.raw_text,
             source_label=source_label,
             history_store=HistoryStore(history_path),
+            fetch_logger=fetch_logger,
         )
+        fetch_logger.source_summary(raw_result.source_status, context.field_sources)
         if not any(status == "success" for status in raw_result.source_status.values()):
             context.warnings.append("真实网页抓取未成功，已使用mock结构化数据兜底。")
         elif any(value in {"real_data", "firecrawl_raw"} for value in context.field_sources.values()):
