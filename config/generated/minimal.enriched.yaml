@@ -1,0 +1,67 @@
+portfolio:
+  name: test
+  base_currency: CNY
+database:
+  path: ':memory:'
+funds:
+- code: '025500'
+  enabled: true
+  name: 东方阿尔法科技智选混合C
+  type: sector_theme
+  role: 待确认
+  auto_enriched: true
+  enrich_confidence: medium
+  manual_review_required: true
+  fund_company: ''
+  fund_manager: ''
+  invest_scope: ''
+  benchmark: ''
+  estimate_nav: 2.5
+  estimate_change_pct: 1.2
+  published_nav: 2.4
+  published_change_pct: 0.8
+  purchase_status: 开放申购
+  redeem_status: 开放赎回
+  nav_history:
+  - nav_date: '2026-06-26'
+    unit_nav: 2.4
+  top_holdings:
+  - holding_stock_code: '603986'
+    holding_stock_name: 兆易创新
+    holding_weight_pct: 8.8
+  tracking:
+    etfs: []
+    indices: []
+    sectors:
+    - name: 人工智能
+      source: name_keyword
+      confidence: medium_low
+    - name: 消费电子
+      source: name_keyword
+      confidence: medium_low
+    - name: PCB
+      source: name_keyword
+      confidence: medium_low
+    manual_holdings: []
+    stocks:
+    - code: '603986'
+      name: 兆易创新
+      source: akshare_holdings
+      confidence: medium
+    tracking_source: akshare_holdings
+    tracking_confidence: medium
+    holding_is_stale: true
+  enrichment:
+    fund_name_source: akshare_daily
+    fund_type_source: classifier
+    holdings_source: akshare
+    firecrawl_used: false
+    firecrawl_status: skipped
+    holding_is_stale: true
+    classifier_reasons:
+    - name_contains_theme_keyword
+    notes:
+    - 基金持仓来自季度披露，可能滞后，不代表实时持仓。
+data_sources:
+  akshare:
+    enabled: true

@@ -45,7 +45,7 @@ funds:
 """,
         encoding="utf-8",
     )
-    monkeypatch.chdir(Path("D:/PycharmProjects/TradingAgents-CN-main"))
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(fund_enrich, "_fetch_akshare", _fake_akshare_payload)
     monkeypatch.setattr(fund_enrich, "_fetch_firecrawl", lambda codes, funds, raw_dir, use_firecrawl: {codes[0]: {"source_status": "skipped", "extracted": {}, "results": []}})
     monkeypatch.setattr(fund_enrich, "_write_sql", lambda *args, **kwargs: {"status": "success"})

@@ -40,7 +40,8 @@ def build_fund_context(fields: Iterable[SqlField], decision_time: str = "1445") 
     etfs: Dict[str, Dict[str, Any]] = defaultdict(dict)
     indices: Dict[str, Dict[str, Any]] = defaultdict(dict)
     sectors: Dict[str, Dict[str, Any]] = defaultdict(dict)
-    sources: List[Dict[str, Any]] = []
+    portfolio: Dict[str, Any] = {}
+    source_rows: Dict[str, Dict[str, Any]] = defaultdict(dict)
     data_date = _latest_trade_date(field_list)
     stale_fields: List[Dict[str, Any]] = []
     for field in field_list:
@@ -68,6 +69,10 @@ def build_fund_context(fields: Iterable[SqlField], decision_time: str = "1445") 
                 _merge_json_fund_context(by_fund[field.entity_code], value)
                 continue
             by_fund[field.entity_code]["fields"][field.field_name] = value
+            if field.field_name == "max_single_position_pct" and portfolio.get("max_single_position_pct") in (None, ""):
+                portfolio["max_single_position_pct"] = value
+        elif field.table_name == "portfolio":
+            portfolio[field.field_name] = value
         elif field.table_name == "fund_intraday_estimate" and field.entity_code:
             by_fund[field.entity_code]["estimates"][field.field_name] = value
         elif field.table_name == "fund_nav_daily" and field.entity_code:
@@ -87,14 +92,12 @@ def build_fund_context(fields: Iterable[SqlField], decision_time: str = "1445") 
         elif field.table_name == "sector_snapshot" and field.entity_code:
             sectors[field.entity_code][field.field_name] = value
         elif field.table_name == "data_source_run":
-            sources.append(
-                {
-                    "source_name": field.entity_code or field.row_id,
-                    "field": field.field_name,
-                    "value": value,
-                    "status": field.source_status,
-                }
-            )
+            row = source_rows[field.row_id]
+            row[field.field_name] = value
+            row.setdefault("source_name", field.entity_code or field.row_id)
+            row.setdefault("trade_date", field.trade_date)
+            row.setdefault("decision_time", field.decision_time)
+            row.setdefault("status", field.source_status)
     for (fund_code, _row_id), item in sorted(holding_rows.items()):
         if item.get("holding_stock_code") or item.get("holding_stock_name"):
             by_fund[fund_code]["holdings"].append(
@@ -109,19 +112,20 @@ def build_fund_context(fields: Iterable[SqlField], decision_time: str = "1445") 
                 }
             )
     for fund in by_fund.values():
-        seen = set()
-        deduped = []
+        deduped: Dict[tuple[str, str], Dict[str, Any]] = {}
         for holding in fund.get("holdings", []):
             key = (str(holding.get("code") or ""), str(holding.get("name") or ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(holding)
-        fund["holdings"] = deduped
+            current = deduped.get(key)
+            if current is None:
+                deduped[key] = holding
+            else:
+                deduped[key] = _merge_holding_item(current, holding)
+        fund["holdings"] = list(deduped.values())
     market_snapshot = _market_quote_snapshot(dict(etfs), dict(indices), dict(sectors), data_date, decision_time)
     return {
         "data_date": data_date,
         "decision_time": decision_time,
+        "portfolio": portfolio,
         "funds": dict(by_fund),
         "securities": dict(securities),
         "etfs": dict(etfs),
@@ -131,7 +135,8 @@ def build_fund_context(fields: Iterable[SqlField], decision_time: str = "1445") 
         "stale_fields": stale_fields[:200],
         "stale_field_count": len(stale_fields),
         "source_field_count": len(field_list),
-        "data_sources": sources[:120],
+        "data_sources": _source_rows_summary(source_rows.values()),
+        "data_source_summary": _source_rows_summary_map(source_rows.values()),
     }
 
 
@@ -299,25 +304,13 @@ def _merge_json_fund_context(item: Dict[str, Any], value: Any) -> None:
     tracking = payload.get("tracking") if isinstance(payload.get("tracking"), dict) else payload
     if isinstance(tracking, dict):
         item["tracking"].update({k: v for k, v in tracking.items() if k in {"etfs", "indices", "sectors", "top_holdings_mode"}})
-        stocks = tracking.get("stocks") or tracking.get("top_holdings") or tracking.get("manual_holdings") or []
-        if isinstance(stocks, list):
-            for stock in stocks:
-                if not isinstance(stock, dict):
-                    continue
-                code = stock.get("holding_stock_code") or stock.get("code") or stock.get("stock_code")
-                name = stock.get("holding_stock_name") or stock.get("name") or stock.get("stock_name") or ""
-                if code or name:
-                    item["holdings"].append(
-                        {
-                            "code": code or "",
-                            "name": name,
-                            "weight_pct": stock.get("holding_weight_pct") or stock.get("weight_pct") or stock.get("weight"),
-                            "market": stock.get("holding_market") or stock.get("market") or "",
-                            "source": stock.get("source") or "fund_enrichment_result",
-                            "source_status": stock.get("source_status") or "success",
-                            "report_date": stock.get("report_date") or "",
-                        }
-                    )
+        for container in (
+            payload.get("top_holdings"),
+            tracking.get("top_holdings"),
+            tracking.get("stocks"),
+            tracking.get("manual_holdings"),
+        ):
+            _append_holdings(item, container)
 
 
 def _json_load(value: Any) -> Dict[str, Any]:
@@ -400,3 +393,81 @@ def _snapshot_time(decision_time: str) -> str:
 
 def _value(value: Any) -> Any:
     return "missing" if value in (None, "") else value
+
+
+def _append_holdings(item: Dict[str, Any], stocks: Any) -> None:
+    if not isinstance(stocks, list):
+        return
+    for stock in stocks:
+        if not isinstance(stock, dict):
+            continue
+        code = stock.get("holding_stock_code") or stock.get("stock_code") or stock.get("code")
+        name = stock.get("holding_stock_name") or stock.get("stock_name") or stock.get("name") or ""
+        weight = _first_non_empty(
+            stock.get("holding_weight_pct"),
+            stock.get("weight_pct"),
+            stock.get("weight"),
+            stock.get("占净值比例"),
+            stock.get("持仓占比"),
+        )
+        if code or name:
+            item["holdings"].append(
+                {
+                    "code": code or "",
+                    "name": name,
+                    "weight_pct": weight,
+                    "market": stock.get("holding_market") or stock.get("market") or "",
+                    "source": stock.get("source") or "fund_enrichment_result",
+                    "source_status": stock.get("source_status") or "success",
+                    "report_date": stock.get("report_date") or stock.get("report_period") or stock.get("quarter") or "",
+                }
+            )
+
+
+def _merge_holding_item(current: Dict[str, Any], new_item: Dict[str, Any]) -> Dict[str, Any]:
+    current_priority = _holding_source_priority(current.get("source"))
+    new_priority = _holding_source_priority(new_item.get("source"))
+    use_current = current_priority >= new_priority
+    preferred = dict(current if use_current else new_item)
+    fallback = new_item if use_current else current
+    for key in ("code", "name", "weight_pct", "market", "source", "source_status", "report_date"):
+        if preferred.get(key) in (None, "", []) and fallback.get(key) not in (None, "", []):
+            preferred[key] = fallback.get(key)
+    return preferred
+
+
+def _holding_source_priority(source: Any) -> int:
+    text = str(source or "").lower()
+    if "akshare" in text or "fund_holding_snapshot" in text:
+        return 3
+    if "eastmoney" in text or "tiantian" in text:
+        return 2
+    if "fund_enrichment_result" in text:
+        return 1
+    return 0
+
+
+def _first_non_empty(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", []):
+            return value
+    return None
+
+
+def _source_rows_summary(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return list(_source_rows_summary_map(rows).values())[:20]
+
+
+def _source_rows_summary_map(rows: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    summary: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        source_name = str(row.get("source_name") or "unknown")
+        summary[source_name] = {
+            "trade_date": row.get("trade_date"),
+            "decision_time": row.get("decision_time"),
+            "status": row.get("fetch_status") or row.get("status") or "unknown",
+            "matched_fields_count": row.get("matched_fields_count"),
+            "missing_fields_count": row.get("missing_fields_count"),
+            "source_type": row.get("source_type") or "",
+        }
+    return summary

@@ -233,6 +233,7 @@ def run_fund_agent_report_from_args(args):
         top_n=args.top_n,
         llm_provider=args.llm_provider,
         unique_report_name=args.unique_report_name,
+        include_sql_debug=args.include_sql_debug,
     )
     get_sector_logger("summary").info(
         "📊 [Summary] 运行完成 | mode=fund_agent_report run_id=%s llm=%s report=%s",
@@ -247,10 +248,20 @@ def run_fund_agent_report_from_args(args):
     print(f"llm_status: {result['llm_status'].get('status')}")
     print(f"llm_provider: {result['llm_status'].get('provider')}")
     print(f"provider_source: {result['llm_status'].get('provider_source')}")
+    quality = result.get("agent_report_core_coverage") or {}
+    if quality:
+        print(f"agent_report_core_coverage: {quality.get('agent_report_core_coverage', 0.0):.2f}%")
+        print("coverage_by_group:")
+        for name in ("fund", "etf", "index", "sector", "holding_stock", "portfolio"):
+            group = (quality.get("groups") or {}).get(name) or {}
+            print(f"{name}: {group.get('coverage', 0.0):.2f}%")
+    print(f"old_data_source_run_excluded: {result.get('old_data_source_run_excluded', 0)}")
+    print(f"sql_debug_included: {str(bool(result.get('sql_debug_included'))).lower()}")
     if result["llm_status"].get("error_reason"):
         print(f"llm_error: {result['llm_status'].get('error_reason')}")
     print("reports:")
     print(f"report: {result['report_path']}")
+    print(f"debug_report: {result['debug_report_path']}")
     print(f"context: {result['context_path']}")
     if result.get("holding_refresh"):
         write_result = result["holding_refresh"].get("write_result", {})
@@ -258,6 +269,9 @@ def run_fund_agent_report_from_args(args):
         print(f"security_quote_snapshot_rows: {write_result.get('security_quote_snapshot_rows', 0)}")
         print(f"field_source_rows: {write_result.get('field_source_rows', 0)}")
         print(f"data_source_run_rows: {write_result.get('data_source_run_rows', 0)}")
+        summary = result["holding_refresh"].get("summary", {})
+        if summary:
+            print(f"holding_stock_success: {summary.get('quote_success', 0)}/{summary.get('total', result['holding_refresh'].get('stock_count', 0))}")
     if result.get("market_refresh"):
         market = result["market_refresh"]
         summary = market.get("summary", {})
@@ -398,6 +412,7 @@ def build_parser():
     parser.add_argument("--top-n", type=int, default=10, help="持仓股票刷新/分析最多处理前N只")
     parser.add_argument("--llm-provider", choices=["dashscope", "deepseek", "openai"], default=None, help="fund_agent_report LLM提供商，优先级高于 FUND_AGENT_REPORT_PROVIDER")
     parser.add_argument("--unique-report-name", action="store_true", help="fund_agent_report 输出带run_id时间戳的报告文件名，避免覆盖旧报告")
+    parser.add_argument("--include-sql-debug", action="store_true", help="fund_agent_report 在正式报告末尾附加 SQL 输入字段列表")
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO", help="sector_fund扩展模式日志级别")
     parser.add_argument("--verbose", action="store_true", help="显示更详细日志，包括部分上游INFO")
     parser.add_argument("--quiet", action="store_true", help="不在终端输出日志，仅保留摘要/文件")

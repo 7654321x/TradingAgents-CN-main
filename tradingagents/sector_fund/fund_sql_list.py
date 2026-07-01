@@ -139,6 +139,11 @@ def list_sql_fields_for_context(db_path: str | Path, decision_time: str = "1445"
         if field.table_name in {"field_source", "security_quote_snapshot", "fund_intraday_estimate"}:
             if data_date and field.trade_date and field.trade_date != data_date:
                 continue
+        if field.table_name == "data_source_run":
+            if data_date and field.trade_date and field.trade_date != data_date:
+                continue
+            if field.decision_time and field.decision_time not in {"", decision_time, "data_probe"}:
+                continue
         if field.table_name == "intraday_snapshot":
             if data_date and field.trade_date and field.trade_date != data_date:
                 continue

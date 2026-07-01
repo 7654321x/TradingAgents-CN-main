@@ -1,0 +1,49 @@
+portfolio:
+  name: test
+  base_currency: CNY
+database:
+  path: ':memory:'
+funds:
+- code: '025500'
+  enabled: true
+  name: 测试基金
+  type: unknown
+  role: 待确认
+  auto_enriched: true
+  enrich_confidence: low
+  manual_review_required: true
+  fund_company: ''
+  fund_manager: ''
+  invest_scope: ''
+  benchmark: ''
+  estimate_nav: null
+  estimate_change_pct: null
+  published_nav: null
+  published_change_pct: null
+  purchase_status: null
+  redeem_status: null
+  nav_history: []
+  top_holdings: []
+  tracking:
+    etfs: []
+    indices: []
+    sectors: []
+    manual_holdings: []
+    tracking_source: ''
+    tracking_confidence: low
+    holding_is_stale: false
+  enrichment:
+    fund_name_source: akshare_daily
+    fund_type_source: classifier
+    holdings_source: ''
+    firecrawl_used: false
+    firecrawl_status: skipped
+    holding_is_stale: false
+    classifier_reasons:
+    - insufficient_evidence
+    notes:
+    - 未能自动推断 tracking，建议人工补充。
+    - 基金类型为自动推断，建议人工确认。
+data_sources:
+  akshare:
+    enabled: true

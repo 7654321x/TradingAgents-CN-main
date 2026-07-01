@@ -165,6 +165,7 @@ def _build_enriched_fund(
     firecrawl: Dict[str, Any],
 ) -> Dict[str, Any]:
     fire_fields = firecrawl.get("extracted", {}) or {}
+    firecrawl_validated = _validated_firecrawl_fields(fire_fields)
     enriched = deepcopy(fund)
     enriched["code"] = str(fund.get("code") or "").zfill(6)
     enriched["name"] = fund_name
@@ -174,10 +175,10 @@ def _build_enriched_fund(
     enriched["auto_enriched"] = True
     enriched["enrich_confidence"] = _merge_confidence(classifier.get("confidence"), tracking.get("confidence"))
     enriched["manual_review_required"] = bool(classifier.get("manual_review_required") or fund.get("role") in (None, "", "待确认"))
-    enriched["fund_company"] = fire_fields.get("fund_company", fund.get("fund_company", ""))
-    enriched["fund_manager"] = fire_fields.get("fund_manager", fund.get("fund_manager", ""))
-    enriched["invest_scope"] = fire_fields.get("invest_scope", fund.get("invest_scope", ""))
-    enriched["benchmark"] = fire_fields.get("benchmark", fund.get("benchmark", ""))
+    enriched["fund_company"] = fund.get("fund_company") or firecrawl_validated.get("fund_company", "")
+    enriched["fund_manager"] = fund.get("fund_manager") or firecrawl_validated.get("fund_manager", "")
+    enriched["invest_scope"] = fund.get("invest_scope") or firecrawl_validated.get("invest_scope", "")
+    enriched["benchmark"] = fund.get("benchmark") or firecrawl_validated.get("benchmark", "")
     enriched["estimate_nav"] = estimate.get("estimate_nav")
     enriched["estimate_change_pct"] = estimate.get("estimate_change_pct")
     enriched["published_nav"] = estimate.get("published_nav") or daily.get("unit_nav")
@@ -193,6 +194,7 @@ def _build_enriched_fund(
         "holdings_source": "akshare" if holdings_payload.get("source_status") == "success" else "",
         "firecrawl_used": firecrawl.get("source_status") not in {"skipped", ""},
         "firecrawl_status": firecrawl.get("source_status", "skipped"),
+        "firecrawl_debug_only_fields": sorted(set(fire_fields) - set(firecrawl_validated)),
         "holding_is_stale": bool(holdings_payload.get("holding_is_stale")),
         "classifier_reasons": classifier.get("reasons", []),
         "notes": _notes(classifier, tracking, firecrawl),
@@ -489,6 +491,28 @@ def _notes(classifier: Dict[str, Any], tracking: Dict[str, Any], firecrawl: Dict
 
 def _matched_fields(row: Dict[str, Any]) -> List[str]:
     return [field for field in ("fund_name", "inferred_type", "estimate_nav", "estimate_change_pct", "top_holdings") if row.get(field) not in (None, "", [], {})]
+
+
+def _validated_firecrawl_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    validated: Dict[str, Any] = {}
+    for name in ("fund_company", "fund_manager", "invest_scope", "benchmark"):
+        value = str(fields.get(name) or "").strip()
+        if _is_reasonable_firecrawl_value(name, value):
+            validated[name] = value
+    return validated
+
+
+def _is_reasonable_firecrawl_value(name: str, value: str) -> bool:
+    if not value:
+        return False
+    limit = 30 if any("\u4e00" <= ch <= "\u9fff" for ch in value) else 80
+    if len(value) > limit:
+        return False
+    if any(token in value for token in ("。", "，", "\n", "：", ";", "；")):
+        return False
+    if name == "fund_manager" and len(value) > 20:
+        return False
+    return True
 
 
 def _holding_names(holdings: List[Dict[str, Any]]) -> str:

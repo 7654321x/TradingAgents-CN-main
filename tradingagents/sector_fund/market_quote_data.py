@@ -127,6 +127,7 @@ def refresh_market_quotes(
     )
     etf_quotes = _fetch_etf_quotes(targets["etfs"])
     index_quotes = _fetch_index_quotes(targets["indices"])
+    logger.info("📥 [MarketQuote] 开始刷新板块行情 | sectors=%s", len(targets["sectors"]))
     sector_quotes = _fetch_sector_quotes(targets["sectors"])
 
     for code, item in etf_quotes.items():
@@ -138,6 +139,8 @@ def refresh_market_quotes(
     for name, item in sector_quotes.items():
         if item.get("source_status") == "success":
             logger.info("✅ [MarketQuote] 板块行情读取成功 | sector=%s change_pct=%s source=%s", name, item.get("change_pct"), item.get("final_source") or item.get("source"))
+        else:
+            logger.warning("⚠️ [MarketQuote] 板块行情缺失 | sector=%s source=eastmoney/akshare", name)
 
     write_result = {"security_quote_snapshot_rows": 0, "field_source_rows": 0, "data_source_run_rows": 0}
     run_id = f"market_quote_refresh_{trade_date}_{decision_time}"
@@ -301,7 +304,7 @@ def _fetch_sector_quotes(sectors: Iterable[str]) -> Dict[str, Dict[str, Any]]:
     quotes = eastmoney.fetch_sector_changes(names)
     missing = [name for name in names if not _is_success_sector(quotes.get(name))]
     if missing:
-        ak_quotes = AkShareProvider().fetch_concept_boards(missing)
+        ak_quotes = AkShareProvider().fetch_sector_boards(missing)
         for name in missing:
             quotes[name] = ak_quotes.get(name, {})
     result: Dict[str, Dict[str, Any]] = {}

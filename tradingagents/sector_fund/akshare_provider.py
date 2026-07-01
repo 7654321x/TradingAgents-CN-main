@@ -6,6 +6,8 @@ import re
 from datetime import date
 from typing import Any, Dict, Iterable, List, Optional
 
+from .eastmoney_quote_provider import LOW_CONFIDENCE_SECTOR_ALIASES, SECTOR_ALIAS_MAP
+
 
 AKSHARE_META = {
     "source": "akshare",
@@ -195,20 +197,22 @@ class AkShareProvider:
         return self._fetch_security_spot(stock_codes, is_etf=False)
 
     def fetch_concept_boards(self, keywords: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+        return self.fetch_sector_boards(keywords)
+
+    def fetch_sector_boards(self, keywords: Iterable[str]) -> Dict[str, Dict[str, Any]]:
         ak = self._import_akshare()
         if ak is None:
             return {keyword: self._dependency_missing(keyword, "sector") for keyword in keywords}
-        try:
-            rows = _records(_quiet_call(ak.stock_board_concept_name_em))
-        except Exception as exc:
-            self.last_error = str(exc)
-            return {keyword: self._failed(keyword, "sector", str(exc)) for keyword in keywords}
+        datasets = self._sector_board_datasets(ak)
+        if not any(dataset["rows"] for dataset in datasets):
+            return {keyword: self._failed(keyword, "sector", self.last_error or "akshare sector board missing") for keyword in keywords}
         result: Dict[str, Dict[str, Any]] = {}
         for keyword in keywords:
-            row = _match_keyword(str(keyword), rows)
-            if not row:
+            match = _match_sector_keyword(str(keyword), datasets)
+            if not match:
                 result[str(keyword)] = self._failed(str(keyword), "sector", "akshare concept board missing")
                 continue
+            row = match["row"]
             result[str(keyword)] = {
                 **AKSHARE_META,
                 "entity_type": "sector",
@@ -223,6 +227,9 @@ class AkShareProvider:
                 "falling_count": _int(row.get("下跌家数")),
                 "leading_stock_name": row.get("领涨股票"),
                 "leading_stock_change_pct": _percent(row.get("领涨股票-涨跌幅") or row.get("领涨股涨跌幅")),
+                "source_interface": match["source_interface"],
+                "match_method": match["match_method"],
+                "match_confidence": match["match_confidence"],
                 "source_status": "success",
             }
         return result
@@ -298,6 +305,25 @@ class AkShareProvider:
 
     def _failed(self, code: str, entity_type: str, reason: str) -> Dict[str, Any]:
         return {**AKSHARE_META, "entity_type": entity_type, "code": code, "source_status": "failed", "error_reason": reason}
+
+    def _sector_board_datasets(self, ak: Any) -> List[Dict[str, Any]]:
+        datasets = []
+        for func_name in (
+            "stock_board_concept_name_em",
+            "stock_board_concept_spot_em",
+            "stock_board_industry_name_em",
+            "stock_board_industry_spot_em",
+        ):
+            rows = []
+            try:
+                func = getattr(ak, func_name, None)
+                if callable(func):
+                    rows = _records(_quiet_call(func))
+            except Exception as exc:
+                self.last_error = str(exc)
+                rows = []
+            datasets.append({"source_interface": func_name, "rows": rows})
+        return datasets
 
 
 def _records(frame: Any) -> List[Dict[str, Any]]:
@@ -393,13 +419,28 @@ def _holding_row(code: str, row: Dict[str, Any], fallback_year: int) -> Dict[str
     }
 
 
-def _match_keyword(keyword: str, rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    for row in rows:
-        name = str(row.get("板块名称") or row.get("概念名称") or row.get("名称") or "")
-        if name == keyword:
-            return row
-    for row in rows:
-        name = str(row.get("板块名称") or row.get("概念名称") or row.get("名称") or "")
-        if keyword and (keyword in name or name in keyword):
-            return row
+def _match_sector_keyword(keyword: str, datasets: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    aliases = [keyword, *SECTOR_ALIAS_MAP.get(keyword, [])]
+    for alias in aliases:
+        for dataset in datasets:
+            for row in dataset["rows"]:
+                name = str(row.get("板块名称") or row.get("概念名称") or row.get("行业名称") or row.get("名称") or "")
+                if name == alias:
+                    return {
+                        "row": row,
+                        "source_interface": dataset["source_interface"],
+                        "match_method": f"matched_by_alias:{alias}" if alias != keyword else "matched_by_exact",
+                        "match_confidence": "low" if alias in LOW_CONFIDENCE_SECTOR_ALIASES else "high",
+                    }
+    for alias in aliases:
+        for dataset in datasets:
+            for row in dataset["rows"]:
+                name = str(row.get("板块名称") or row.get("概念名称") or row.get("行业名称") or row.get("名称") or "")
+                if alias and (alias in name or name in alias):
+                    return {
+                        "row": row,
+                        "source_interface": dataset["source_interface"],
+                        "match_method": f"matched_by_contains:{alias}",
+                        "match_confidence": "low" if alias in LOW_CONFIDENCE_SECTOR_ALIASES else "medium",
+                    }
     return None

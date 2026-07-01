@@ -15,7 +15,7 @@ funds:
 """
     config_path = tmp_path / "portfolio.yaml"
     config_path.write_text(original, encoding="utf-8")
-    monkeypatch.chdir(Path("D:/PycharmProjects/TradingAgents-CN-main"))
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         fund_enrich,
         "_fetch_akshare",
