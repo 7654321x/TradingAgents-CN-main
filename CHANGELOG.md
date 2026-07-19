@@ -440,3 +440,9 @@ PRs from late 2025 also landed here.
 [0.2.0]: https://github.com/TauricResearch/TradingAgents/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/TauricResearch/TradingAgents/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TauricResearch/TradingAgents/releases/tag/v0.1.0
+# 1.0 (2026-07-19)
+
+- 建立 TradingAgents-CN 当前维护基线；
+- 支持 A 股行情、结构化股票决策报告和基金技术报告；
+- 加入 SQLAlchemy/Alembic 存储、多 Provider LLM 适配及项目交接文档；
+- 将版本发布规则设为后续按 1.1、1.2、1.3 依次递增。
