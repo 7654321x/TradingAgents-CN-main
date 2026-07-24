@@ -1,4 +1,4 @@
-from tradingagents.storage.db import Base
+from tradingagents.storage.db import Base, default_database_url
 from tradingagents.storage.models import import_models
 from alembic import context
 from sqlalchemy import engine_from_config, pool
@@ -11,9 +11,14 @@ target_metadata = Base.metadata
 config = context.config
 # A temporary URL is used by schema-generation and verification tests; it
 # deliberately takes precedence over alembic.ini's local default.
-override_url = os.getenv("TRADINGAGENTS_ALEMBIC_DATABASE_URL")
+override_url = (
+    os.getenv("TRADINGAGENTS_ALEMBIC_DATABASE_URL")
+    or os.getenv("TRADINGAGENTS_DATABASE_URL")
+)
 if override_url:
     config.set_main_option("sqlalchemy.url", override_url)
+else:
+    config.set_main_option("sqlalchemy.url", default_database_url())
 # Project alembic.ini intentionally has a minimal logging section.
 def run_migrations_offline():
     context.configure(url=config.get_main_option("sqlalchemy.url"), target_metadata=target_metadata, literal_binds=True, dialect_opts={"paramstyle":"named"})

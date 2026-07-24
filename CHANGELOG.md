@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [1.1] — 2026-07-24
+
+### Added
+
+- Source-audited sector-fund V2 scoring: separate core trend and short-term
+  scores, explicit coverage gates, and no user-facing score when the required
+  source data is incomplete.
+- Independent MCP raw-document storage for current-day market pages, Firecrawl
+  search evidence, industry-cycle pages, financial disclosures, and event
+  discovery.  It cannot overwrite historical market bars.
+- Firecrawl A/B source fallback with C-level media leads stored separately and
+  excluded from scoring until confirmed.
+- Strict extractors for dated industry and company fundamentals.  Raw pages
+  must provide a value, unit, applicable period, publication date, and source
+  evidence before a fact is admitted.
+- Fixed fifteen-section fund report and a reusable fund profile/runtime route.
+  Funds without verified target ETF/index relations degrade to NAV and disclosed
+  holdings analysis instead of guessing an exposure.
+
+### Fixed
+
+- Current-day and historic report reads now enforce `available_at`, preventing
+  later web documents from leaking into earlier analysis dates.
+- Provider failures now retry, retain field-level failure audits, and save raw
+  fallback evidence rather than silently changing data semantics.
+
 ## [0.3.1] — 2026-07-05
 
 Correctness and stability patch: data look-ahead, graph-router crash-safety,

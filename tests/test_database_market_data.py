@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import tradingagents.dataflows.config as dataflow_config
@@ -14,6 +16,7 @@ from tradingagents.storage.data_service import (
     PROVIDER_ERROR,
     SUCCESS,
     MarketDataService,
+    is_final_daily_bar,
 )
 from tradingagents.storage.db import get_engine, init_db
 from tradingagents.storage.models import Instrument, MarketBarObservation
@@ -170,6 +173,151 @@ def test_provider_only_can_persist_then_reread(engine):
     assert result.refreshed is True
     assert result.provider_call_count == 1
     assert len(result.data) == 5
+
+
+def test_persistence_keeps_provider_provenance(engine):
+    def eastmoney_provider(*_):
+        frame = _frame(rows=5)
+        frame.attrs["market_source"] = "akshare_eastmoney"
+        frame.attrs["upstream_group"] = "eastmoney"
+        return frame
+
+    with Session(engine) as session:
+        result = MarketDataService(
+            session,
+            "provider_only",
+            eastmoney_provider,
+            persist_provider_results=True,
+        ).daily("688981.SS", "2024-01-01", "2024-01-08")
+        stored = session.scalars(select(MarketBarObservation)).all()
+    assert result.status == SUCCESS
+    assert result.provider_name == "akshare_eastmoney"
+    assert {row.provider for row in stored} == {"akshare_eastmoney"}
+
+
+def test_explicit_sync_can_require_historical_range_coverage(engine):
+    _seed(engine, frame=_frame(start="2024-01-15", rows=10))
+    calls = []
+    with Session(engine) as session:
+        result = MarketDataService(
+            session,
+            "database_first",
+            lambda *_: (calls.append(1) or _frame(start="2024-01-02", rows=22)),
+            require_requested_start=True,
+        ).daily("688981.SS", "2024-01-02", "2024-01-31")
+    assert result.status == SUCCESS
+    assert calls == [1]
+
+
+def test_strict_end_coverage_refreshes_a_stale_tail_inside_holiday_grace(engine):
+    _seed(engine, frame=_frame(start="2024-01-02", rows=10))
+    calls = []
+    with Session(engine) as session:
+        result = MarketDataService(
+            session,
+            "database_first",
+            lambda *_: (calls.append(1) or _frame(start="2024-01-02", rows=22)),
+            strict_requested_end=True,
+        ).daily("688981.SS", "2024-01-02", "2024-01-31")
+
+    assert result.status == SUCCESS
+    assert calls == [1]
+
+
+def test_turnover_requirement_refreshes_price_only_cache(engine):
+    price_only = _frame(start="2024-01-02", rows=22)
+    _seed(engine, frame=price_only)
+    calls = []
+    provider_frame = _frame(start="2024-01-02", rows=22)
+    provider_frame["Amount"] = provider_frame["Close"] * provider_frame["Volume"] * 100
+    with Session(engine) as session:
+        result = MarketDataService(
+            session,
+            "database_first",
+            lambda *_: (calls.append(1) or provider_frame),
+            strict_requested_end=True,
+            require_turnover_amount=True,
+        ).daily("688981.SS", "2024-01-02", "2024-01-31")
+
+    assert result.status == SUCCESS
+    assert calls == [1]
+    assert result.data["Amount"].notna().all()
+
+
+def test_daily_repository_prefers_complete_amount_when_providers_use_different_bar_times(engine):
+    price_only = _frame(start="2024-01-02", rows=22)
+    _seed(engine, frame=price_only)
+    amount_frame = _frame(start="2024-01-02", rows=22)
+    amount_frame["Amount"] = amount_frame["Close"] * amount_frame["Volume"] * 100
+    with Session(engine) as session:
+        result = MarketDataService(
+            session,
+            "database_first",
+            lambda *_: amount_frame,
+            strict_requested_end=True,
+            require_turnover_amount=True,
+        ).daily("688981.SS", "2024-01-02", "2024-01-31")
+
+    assert result.status == SUCCESS
+    assert len(result.data) == 22
+    assert result.data["Amount"].notna().all()
+
+
+def test_late_listing_is_usable_after_minimum_history(engine):
+    source = _frame(start="2024-01-15", rows=10)
+    _seed(engine, frame=source)
+    with Session(engine) as session:
+        result = MarketDataService(
+            session,
+            "database_only",
+            require_requested_start=True,
+            minimum_rows_if_start_missing=10,
+        ).daily("688981.SS", "2024-01-02", "2024-01-31")
+    assert result.status == SUCCESS
+    assert result.provider_call_count == 0
+
+
+def test_same_day_daily_bar_becomes_final_after_shanghai_cutoff():
+    day = date(2026, 7, 22)
+    timezone = ZoneInfo("Asia/Shanghai")
+    assert not is_final_daily_bar(day, now=datetime(2026, 7, 22, 15, 59, tzinfo=timezone))
+    assert is_final_daily_bar(day, now=datetime(2026, 7, 22, 16, 0, tzinfo=timezone))
+    assert not is_final_daily_bar(date(2026, 7, 23), now=datetime(2026, 7, 22, 20, 0, tzinfo=timezone))
+
+
+def test_repository_prefers_complete_amount_row_over_later_incomplete_row(engine):
+    source = _frame(rows=5)
+    _seed(engine, frame=source)
+    latest_date = source.index[-1]
+    with Session(engine) as session:
+        instrument = session.scalar(select(Instrument).where(Instrument.symbol == "688981.SS"))
+        session.add(
+            MarketBarObservation(
+                instrument_id=instrument.id,
+                interval="1d",
+                bar_time=latest_date.to_pydatetime(),
+                market_date=latest_date.date().isoformat(),
+                open=1.0,
+                high=2.0,
+                low=0.5,
+                close=1.5,
+                volume=100.0,
+                amount=150.0,
+                is_final=True,
+                provider="akshare_eastmoney",
+                upstream_group="eastmoney",
+                available_at=datetime(2023, 1, 1),
+                fetched_at=datetime(2023, 1, 1),
+                payload_hash="complete-amount-row",
+                run_id="test",
+            )
+        )
+        session.commit()
+        result = MarketDataService(session, "database_only").daily(
+            "688981.SS", "2024-01-02", "2024-01-08"
+        )
+    assert result.data.loc[latest_date, "Amount"] == 150.0
+    assert result.data.loc[latest_date, "Close"] == 1.5
 
 
 def test_repository_excludes_future_and_unfinished_daily(engine):

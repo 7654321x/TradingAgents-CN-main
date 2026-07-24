@@ -3,21 +3,43 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .market import clean_ticker_frame
 from .models import Instrument, MarketBarObservation
 from .repository import MarketBarRepository
 
-
 SUCCESS = "SUCCESS"
 MARKET_DATA_UNAVAILABLE = "MARKET_DATA_UNAVAILABLE"
 DATABASE_RANGE_INCOMPLETE = "DATABASE_RANGE_INCOMPLETE"
 PROVIDER_ERROR = "PROVIDER_ERROR"
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+DAILY_BAR_FINALIZATION_CUTOFF = time(16, 0)
+
+
+def is_final_daily_bar(market_date: date, *, now: datetime | None = None) -> bool:
+    """Return whether a China daily bar can be treated as final.
+
+    Same-day bars remain excluded during the trading/settlement window.  After
+    16:00 Asia/Shanghai, a successfully retrieved same-day daily bar is usable
+    as final input; future-dated bars are never final.
+    """
+    current = now or datetime.now(SHANGHAI_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=SHANGHAI_TZ)
+    else:
+        current = current.astimezone(SHANGHAI_TZ)
+    today = current.date()
+    if market_date < today:
+        return True
+    if market_date > today:
+        return False
+    return current.time() >= DAILY_BAR_FINALIZATION_CUTOFF
 
 
 @dataclass
@@ -33,6 +55,7 @@ class MarketDataResult:
     requested_end: date | datetime | str
     first_bar: date | datetime | None
     latest_bar: date | datetime | None
+    provider_name: str | None = None
     message: str | None = None
 
 
@@ -53,6 +76,10 @@ class MarketDataService:
         *,
         include_unfinished_daily_bar: bool = False,
         persist_provider_results: bool = False,
+        require_requested_start: bool = False,
+        minimum_rows_if_start_missing: int = 0,
+        strict_requested_end: bool = False,
+        require_turnover_amount: bool = False,
     ):
         if mode not in self.MODES:
             raise ValueError(f"Unsupported market data mode: {mode}")
@@ -62,6 +89,10 @@ class MarketDataService:
         self.provider = provider
         self.include_unfinished_daily_bar = include_unfinished_daily_bar
         self.persist_provider_results = persist_provider_results
+        self.require_requested_start = require_requested_start
+        self.minimum_rows_if_start_missing = minimum_rows_if_start_missing
+        self.strict_requested_end = strict_requested_end
+        self.require_turnover_amount = require_turnover_amount
 
     def _result(
         self,
@@ -74,6 +105,7 @@ class MarketDataService:
         status,
         refreshed=False,
         provider_call_count=0,
+        provider_name=None,
         message=None,
     ) -> MarketDataResult:
         first = frame.index[0].date() if not frame.empty else None
@@ -90,6 +122,7 @@ class MarketDataService:
             requested_end=end,
             first_bar=first,
             latest_bar=latest,
+            provider_name=provider_name,
             message=message,
         )
 
@@ -101,8 +134,7 @@ class MarketDataService:
             include_unfinished=self.include_unfinished_daily_bar,
         )
 
-    @staticmethod
-    def _covers_requested_end(frame: pd.DataFrame, end) -> bool:
+    def _covers_requested_end(self, frame: pd.DataFrame, end) -> bool:
         """Detect an obviously stale tail without pretending to be a calendar.
 
         Ten calendar days accommodates weekends and long exchange holidays.
@@ -111,7 +143,28 @@ class MarketDataService:
         """
         if frame.empty:
             return False
+        if self.strict_requested_end:
+            return frame.index[-1].normalize() >= pd.Timestamp(end).normalize()
         return frame.index[-1].normalize() >= pd.Timestamp(end).normalize() - pd.Timedelta(days=10)
+
+    def _covers_requested_range(self, frame: pd.DataFrame, start, end) -> bool:
+        if not self._covers_requested_end(frame, end):
+            return False
+        if self.require_turnover_amount and (
+            "Amount" not in frame.columns or frame["Amount"].isna().any()
+        ):
+            return False
+        if not self.require_requested_start:
+            return True
+        if frame.empty:
+            return False
+        # A ten-day grace window preserves holiday behaviour while preventing
+        # a cached tail from masquerading as a full historical range.  A
+        # constituent/ETF listed after the requested start is valid when it
+        # already has the caller's required indicator history.
+        if frame.index[0].normalize() <= pd.Timestamp(start).normalize() + pd.Timedelta(days=10):
+            return True
+        return self.minimum_rows_if_start_missing > 0 and len(frame) >= self.minimum_rows_if_start_missing
 
     @staticmethod
     def _clean_provider_frame(frame: pd.DataFrame, start, end) -> pd.DataFrame:
@@ -129,7 +182,14 @@ class MarketDataService:
         end_ts = pd.Timestamp(end).normalize()
         return data.loc[(data.index.normalize() >= start_ts) & (data.index.normalize() <= end_ts)].sort_index()
 
-    def _persist_daily(self, symbol: str, frame: pd.DataFrame) -> None:
+    def _persist_daily(
+        self,
+        symbol: str,
+        frame: pd.DataFrame,
+        *,
+        provider_name: str = "yfinance",
+        upstream_group: str = "yahoo_finance",
+    ) -> None:
         instrument = self.session.scalar(select(Instrument).where(Instrument.symbol == symbol))
         if instrument is None:
             suffix = "SS" if symbol.endswith(".SS") else "SZ" if symbol.endswith(".SZ") else None
@@ -146,7 +206,6 @@ class MarketDataService:
             self.session.flush()
 
         fetched_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        today = datetime.now().date()
         for idx, row in frame.iterrows():
             market_date = pd.Timestamp(idx).date()
             payload = {
@@ -162,15 +221,15 @@ class MarketDataService:
                     MarketBarObservation.instrument_id == instrument.id,
                     MarketBarObservation.interval == "1d",
                     MarketBarObservation.market_date == market_date.isoformat(),
-                    MarketBarObservation.provider == "yfinance",
+                    MarketBarObservation.provider == provider_name,
                     MarketBarObservation.payload_hash == payload_hash,
                 )
             )
             if exists:
                 continue
 
-            def number(column):
-                value = row.get(column)
+            def number(column, source_row=row):
+                value = source_row.get(column)
                 return float(value) if value is not None and pd.notna(value) else None
 
             self.session.add(
@@ -185,12 +244,13 @@ class MarketDataService:
                     close=number("Close"),
                     adjusted_close=number("Adj Close"),
                     volume=number("Volume"),
+                    amount=number("Amount"),
                     dividends=number("Dividends"),
                     stock_splits=number("Stock Splits"),
                     capital_gains=number("Capital Gains"),
-                    is_final=market_date < today,
-                    provider="yfinance",
-                    upstream_group="yahoo_finance",
+                    is_final=is_final_daily_bar(market_date),
+                    provider=provider_name,
+                    upstream_group=upstream_group,
                     source_event_time=bar_time,
                     available_at=fetched_at,
                     fetched_at=fetched_at,
@@ -200,15 +260,35 @@ class MarketDataService:
             )
         self.session.commit()
 
+    def _finalize_completed_same_day_bars(self) -> None:
+        """Promote earlier same-day cache rows once the settlement cutoff passes."""
+        now = datetime.now(SHANGHAI_TZ)
+        today = now.date()
+        if not is_final_daily_bar(today, now=now):
+            return
+        updated = self.session.execute(
+            update(MarketBarObservation)
+            .where(MarketBarObservation.interval == "1d")
+            .where(MarketBarObservation.market_date == today.isoformat())
+            .where(MarketBarObservation.is_final.is_(False))
+            .values(is_final=True)
+        )
+        if updated.rowcount:
+            self.session.commit()
+
     def _call_provider(self, symbol, start, end):
         if self.provider is None:
             raise RuntimeError("No market data provider configured")
-        return self._clean_provider_frame(self.provider(symbol, start, end), start, end)
+        raw = self.provider(symbol, start, end)
+        frame = self._clean_provider_frame(raw, start, end)
+        frame.attrs.update(getattr(raw, "attrs", {}))
+        return frame
 
     def daily(self, symbol, start, end) -> MarketDataResult:
+        self._finalize_completed_same_day_bars()
         if self.mode != "provider_only":
             cached = self._database_frame(symbol, start, end)
-            if self._covers_requested_end(cached, end):
+            if self._covers_requested_range(cached, start, end):
                 return self._result(
                     symbol, start, end, cached, source="database", status=SUCCESS
                 )
@@ -256,6 +336,9 @@ class MarketDataService:
                 message="Provider returned no valid daily bars",
             )
 
+        provider_name = provider_frame.attrs.get("market_source", "yfinance")
+        upstream_group = provider_frame.attrs.get("upstream_group", provider_name)
+
         should_persist = self.mode == "database_first" or self.persist_provider_results
         if not should_persist:
             return self._result(
@@ -266,10 +349,16 @@ class MarketDataService:
                 source="provider",
                 status=SUCCESS,
                 provider_call_count=1,
+                provider_name=provider_name,
             )
 
         try:
-            self._persist_daily(symbol, provider_frame)
+            self._persist_daily(
+                symbol,
+                provider_frame,
+                provider_name=provider_name,
+                upstream_group=upstream_group,
+            )
             persisted = self._database_frame(symbol, start, end)
         except Exception as exc:
             self.session.rollback()
@@ -285,7 +374,7 @@ class MarketDataService:
                 message=f"Persistence failed: {type(exc).__name__}: {exc}",
             )
 
-        if not self._covers_requested_end(persisted, end):
+        if not self._covers_requested_range(persisted, start, end):
             return self._result(
                 symbol,
                 start,
@@ -295,7 +384,7 @@ class MarketDataService:
                 status=DATABASE_RANGE_INCOMPLETE,
                 refreshed=True,
                 provider_call_count=1,
-                message="Provider data was persisted but no final daily bars were readable",
+                message="Provider data was persisted but did not meet requested coverage requirements",
             )
         return self._result(
             symbol,
@@ -306,4 +395,5 @@ class MarketDataService:
             status=SUCCESS,
             refreshed=True,
             provider_call_count=1,
+            provider_name=provider_name,
         )
